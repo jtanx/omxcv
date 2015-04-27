@@ -16,8 +16,7 @@ using std::chrono::duration_cast;
 #include <chrono>
 #include <thread>
 
-#define CAMERA_WIDTH 1280
-#define CAMERA_HEIGHT 720
+#define TIMEDIFF(start) (duration_cast<milliseconds>(steady_clock::now() - start).count())
 
 bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden) {
     int ret;
@@ -96,8 +95,12 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
 {
     bcm_host_init();
     OMX_Init();
-    m_width = width;
-    m_height = height;
+    //Imposed restrictions due to slice height and stride width 
+    m_width = ((width + 31) / 32) * 32;
+    m_height = ((height + 15) / 16) * 16;
+    if (m_width != width || m_height != height) {
+        printf("Warning: Resize necessary due to width/height not being a multiple of 32/16, expect it to be slow!\n");
+    }
     m_ilclient = ilclient_init();
     ilclient_create_component(m_ilclient, &m_encoder_component, (char*)"video_encode", 
                           (ILCLIENT_CREATE_FLAGS_T)(ILCLIENT_DISABLE_ALL_PORTS | 
@@ -112,11 +115,13 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     OMX_GetParameter(ILC_GET_HANDLE(m_encoder_component),
                      OMX_IndexParamPortDefinition, &def);
                      
-    def.format.video.nFrameWidth = width;
-    def.format.video.nFrameHeight = height;
+    def.format.video.nFrameWidth = m_width;
+    def.format.video.nFrameHeight = m_height;
     def.format.video.xFramerate = 25 << 16;
-    def.format.video.nSliceHeight = def.format.video.nFrameHeight;
-    def.format.video.nStride = def.format.video.nFrameWidth;
+    //Must be a multiple of 16
+    def.format.video.nSliceHeight = m_height;
+    //Must be a multiple of 32
+    def.format.video.nStride = m_width;
     def.format.video.eColorFormat = OMX_COLOR_FormatYUV420PackedPlanar;
 
     OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
@@ -155,7 +160,7 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     m_fpsnum = fpsnum;
     m_fpsden = fpsden;
     //Initialise the scaler and output file
-    lav_init(name, width, height, bitrate, fpsnum, fpsden);
+    lav_init(name, m_width, m_height, bitrate, fpsnum, fpsden);
 
     m_frame_count = 0;
     m_timecodes = fopen("timecodes.txt", "w");
@@ -233,8 +238,8 @@ void OmxCvImpl::worker() {
             }
             OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
         } else {
-            printf("Zero buffer received; sleeping...\n");
-            sleep_for(milliseconds(300));
+            //printf("Zero buffer received; sleeping...\n");
+            sleep_for(milliseconds(15));
         }
     }
 }
@@ -248,7 +253,7 @@ bool OmxCvImpl::process(const cv::Mat &mat) {
         fprintf(m_timecodes, "0\n");
         m_frame_start = steady_clock::now();
     } else {
-        int diff = duration_cast<milliseconds>(steady_clock::now() - m_frame_start).count();
+        int diff = TIMEDIFF(m_frame_start);
         fprintf(m_timecodes, "%d\n", diff);
     }
 
@@ -263,12 +268,14 @@ bool OmxCvImpl::process(const cv::Mat &mat) {
                                      PIX_FMT_BGR24, m_width, m_height,
                                      PIX_FMT_YUV420P, SWS_BICUBIC,
                                      NULL, NULL, NULL);
-    
+
     //Set the encoder input buffer as the output
-    in->nFilledLen = avpicture_fill((AVPicture*)m_omx_in,
+    avpicture_fill((AVPicture*)m_omx_in,
                                     in->pBuffer,
                                     PIX_FMT_YUV420P,
                                     m_width, m_height);
+    in->nFilledLen = in->nAllocLen;
+    printf("YUV420P linesize: %d, %d, %d\n", m_omx_in->linesize[0], m_omx_in->linesize[1], m_omx_in->linesize[2]);
 
     //Perform the transform
     int linesize[4] = {mat.step, 0, 0, 0};
@@ -284,6 +291,16 @@ bool OmxCvImpl::process(const cv::Mat &mat) {
 
 int main(int argc, char *argv[]) {
     cv::VideoCapture capture(-1);
+    int width = 640, height = 480, framecount = 200;
+
+    if (argc >= 3) {
+        width = atoi(argv[1]);
+        height = atoi(argv[2]);
+    }
+
+    if (argc >= 4) {
+        framecount = atoi(argv[3]);
+    }
     
     //Open the camera (testing only)
     if (!capture.isOpened()) {
@@ -291,18 +308,22 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     //We can try to set these, but the camera may ignore this anyway...
-    capture.set(CV_CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH);
-    capture.set(CV_CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT);
+    capture.set(CV_CAP_PROP_FOURCC, CV_FOURCC('M', 'J', 'P', 'G'));
+    capture.set(CV_CAP_PROP_FRAME_WIDTH, width);
+    capture.set(CV_CAP_PROP_FRAME_HEIGHT, height);
     capture.set(CV_CAP_PROP_FPS, 30);
     
     OmxCvImpl e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
     cv::Mat image;
-    for(int i = 0; i < 50; i++) {
+    auto totstart = steady_clock::now();
+    for(int i = 0; i < framecount; i++) {
         capture >> image;
+        auto start = steady_clock::now();
         e.process(image);
-        printf("Processed frame %d\n", i+1);
+        printf("Processed frame %d (%d ms)\n", i+1, (int)TIMEDIFF(start));
     }
     
+    printf("Average FPS: %.2f\n", (framecount * 1000) / (float)TIMEDIFF(totstart));
     printf("DEPTH: %d, WIDTH: %d, HEIGHT: %d, IW: %d\n", image.depth(), image.cols, image.rows, static_cast<int>(image.step));
     sleep_for(milliseconds(300));
     

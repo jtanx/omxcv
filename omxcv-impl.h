@@ -23,12 +23,8 @@ extern "C" {
 #include <libavutil/mathematics.h>
 #include <libavformat/avio.h>
 
-//Sigh
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wvariadic-macros"
 #include <bcm_host.h>
 #include <ilclient.h>
-#pragma GCC diagnostic pop
 }
 
 

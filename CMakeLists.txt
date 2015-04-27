@@ -31,7 +31,7 @@ link_directories (/opt/vc/lib /opt/vc/src/hello_pi/libs/ilclient)
 
 #Compile options
 if (CMAKE_COMPILER_IS_GNUCXX)
-	set (CMAKE_CXX_FLAGS "-Wall -std=c++11 -pedantic -gdwarf-3")
+	set (CMAKE_CXX_FLAGS "-Wall -Wno-variadic-macros -std=c++11 -pedantic -pg")#-gdwarf-3")
 endif (CMAKE_COMPILER_IS_GNUCXX)
 
 #Source files
