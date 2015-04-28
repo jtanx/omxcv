@@ -200,17 +200,26 @@ void OmxCvImpl::input_worker() {
     std::unique_lock<std::mutex> lock(m_input_mutex);
     OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
 
+    //FILE *fp = fopen("test.yuv", "wb");
     while (true) {
         m_input_signaller.wait(lock, [this]{return m_stop || m_input_queue.size() > 0;});
         if (m_stop) {
             if (m_input_queue.size() > 0) {
-                printf("Stop acknowledged but need to flush the input buffer (%d)...", m_input_queue.size());
+                printf("Stop acknowledged but need to flush the input buffer (%d)...\n", m_input_queue.size());
+            } else {
+                break;
             }
-            break;
+        }
+
+        if (m_input_queue.size() > 30) {
+            printf("Queue too large; dropping frames!\n");
+            while (m_input_queue.size() > 30) {
+                m_input_queue.pop_front();
+            }
         }
 
         std::pair<cv::Mat, uint64_t> frame = m_input_queue.front();
-        cv::Mat &mat = frame.first;
+        cv::Mat mat = frame.first;
         m_input_queue.pop_front();
         lock.unlock();
 
@@ -225,6 +234,7 @@ void OmxCvImpl::input_worker() {
                 printf("Time to get buffer (ms): %d\n",td);
             }
 
+            //fwrite(mat.data, mat.step, mat.rows, fp);
             int in_width = (mat.cols / 32) * 32, in_height = (mat.rows / 16) * 16;
             //Recheck the context
             m_sws_ctx = sws_getCachedContext(m_sws_ctx, in_width, in_height,
@@ -239,7 +249,7 @@ void OmxCvImpl::input_worker() {
                                             m_width, m_height);
             in->nFilledLen = in->nAllocLen;
             //printf("YUV420P linesize: %d, %d, %d\n", m_omx_in->linesize[0], m_omx_in->linesize[1], m_omx_in->linesize[2]);
-
+            //fwrite(in->pBuffer, in->nFilledLen, 1, fp);
             //Perform the transform
             int linesize[4] = {mat.step, 0, 0, 0};
             int ret = sws_scale(m_sws_ctx, (uint8_t **) &(mat.data),
@@ -255,6 +265,7 @@ void OmxCvImpl::input_worker() {
         lock.lock();
     }
 
+    //fclose(fp);
     in->nFilledLen = 0;
     OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
 }
@@ -315,6 +326,8 @@ void OmxCvImpl::output_worker() {
 bool OmxCvImpl::process(const cv::Mat &mat) {
     //Well, we could just write out the raw H.264 stream and get mkvmerge to mux
     //it with these timecodes. So much simpler than libav...
+    cv::Mat ours = mat.clone();
+
     auto now = steady_clock::now();
     std::unique_lock<std::mutex> lock(m_input_mutex);
 
@@ -322,7 +335,7 @@ bool OmxCvImpl::process(const cv::Mat &mat) {
         m_frame_start = now;
     }
 
-    m_input_queue.push_back(std::pair<cv::Mat, uint64_t>(mat, duration_cast<milliseconds>(now-m_frame_start).count()));
+    m_input_queue.push_back(std::pair<cv::Mat, uint64_t>(ours, duration_cast<milliseconds>(now-m_frame_start).count()));
     lock.unlock();
     m_input_signaller.notify_one();
     
@@ -354,15 +367,16 @@ int main(int argc, char *argv[]) {
     capture.set(CV_CAP_PROP_FPS, 30);
     
     OmxCvImpl e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
-    cv::Mat image;
+    
     auto totstart = steady_clock::now();
+    cv::Mat image;
     for(int i = 0; i < framecount; i++) {
         capture >> image;
         auto start = steady_clock::now();
         e.process(image);
         printf("Processed frame %d (%d ms)\n", i+1, (int)TIMEDIFF(start));
     }
-    
+
     printf("Average FPS: %.2f\n", (framecount * 1000) / (float)TIMEDIFF(totstart));
     printf("DEPTH: %d, WIDTH: %d, HEIGHT: %d, IW: %d\n", image.depth(), image.cols, image.rows, static_cast<int>(image.step));
     sleep_for(milliseconds(300));
