@@ -10,6 +10,8 @@
 #include <mutex>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <utility>
 
 #include <opencv2/opencv.hpp>
 
@@ -53,7 +55,12 @@ namespace omxcv {
             AVFrame *m_omx_in;
             SwsContext *m_sws_ctx;
 
-            std::thread m_worker;
+            std::condition_variable m_input_signaller;
+            std::deque<std::pair<cv::Mat, uint64_t>> m_input_queue;
+            std::thread m_input_worker;
+            std::mutex  m_input_mutex;
+
+            std::thread m_output_worker;
             std::atomic<bool> m_stop;
             
             /** The OpenMAX IL client **/
@@ -68,7 +75,8 @@ namespace omxcv {
             std::chrono::steady_clock::time_point m_frame_start;
             int m_frame_count;
 
-            void worker();
+            void input_worker();
+            void output_worker();
             bool lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden);
     };
 }

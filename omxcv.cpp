@@ -96,10 +96,11 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     bcm_host_init();
     OMX_Init();
     //Imposed restrictions due to slice height and stride width 
-    m_width = ((width + 31) / 32) * 32;
-    m_height = ((height + 15) / 16) * 16;
+    m_width = (width / 32) * 32;
+    m_height = (height / 16) * 16;
     if (m_width != width || m_height != height) {
-        printf("Warning: Resize necessary due to width/height not being a multiple of 32/16, expect it to be slow!\n");
+        printf("Warning: Crop necessary to %dx%d due to width/height not being a multiple of 32/16.\n",
+               m_width, m_height);
     }
     m_ilclient = ilclient_init();
     ilclient_create_component(m_ilclient, &m_encoder_component, (char*)"video_encode", 
@@ -167,18 +168,22 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     fprintf(m_timecodes, "# timecode format v2\n");
 
     //Start the worker thread for dumping the encoded data
-    m_worker = std::thread(&OmxCvImpl::worker, this);
+    m_output_worker = std::thread(&OmxCvImpl::output_worker, this);
+    m_input_worker = std::thread(&OmxCvImpl::input_worker, this);
 }
 
 OmxCvImpl::~OmxCvImpl() {
     m_stop = true;
-    m_worker.join();
+    m_input_signaller.notify_one();
+    m_input_worker.join();
+    m_output_worker.join();
 
     //Teardown similar to hello_encode
+    ilclient_change_component_state(m_encoder_component, OMX_StateIdle);
     ilclient_disable_port_buffers(m_encoder_component, OMX_ENCODE_PORT_IN, NULL, NULL, NULL);
     ilclient_disable_port_buffers(m_encoder_component, OMX_ENCODE_PORT_OUT, NULL, NULL, NULL);
 
-    ilclient_change_component_state(m_encoder_component, OMX_StateIdle);
+    //ilclient_change_component_state(m_encoder_component, OMX_StateIdle);
     ilclient_change_component_state(m_encoder_component, OMX_StateLoaded);
 
     COMPONENT_T *list[] = {m_encoder_component, NULL};
@@ -191,11 +196,73 @@ OmxCvImpl::~OmxCvImpl() {
     fclose(m_timecodes);
 }
 
-void OmxCvImpl::worker() {
-    while (!m_stop) {
-        static int i = 0;
+void OmxCvImpl::input_worker() {
+    std::unique_lock<std::mutex> lock(m_input_mutex);
+    OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
 
-        OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 0);
+    while (true) {
+        m_input_signaller.wait(lock, [this]{return m_stop || m_input_queue.size() > 0;});
+        if (m_stop) {
+            if (m_input_queue.size() > 0) {
+                printf("Stop acknowledged but need to flush the input buffer (%d)...", m_input_queue.size());
+            }
+            break;
+        }
+
+        std::pair<cv::Mat, uint64_t> frame = m_input_queue.front();
+        cv::Mat &mat = frame.first;
+        m_input_queue.pop_front();
+        lock.unlock();
+
+        fprintf(m_timecodes, "%llu\n", frame.second);
+
+        auto start = steady_clock::now();
+        if (in == NULL) {
+            printf("NO INPUT BUFFER");
+        } else {
+            int td = (int)TIMEDIFF(start);
+            if (td > 0) {
+                printf("Time to get buffer (ms): %d\n",td);
+            }
+
+            int in_width = (mat.cols / 32) * 32, in_height = (mat.rows / 16) * 16;
+            //Recheck the context
+            m_sws_ctx = sws_getCachedContext(m_sws_ctx, in_width, in_height,
+                                             PIX_FMT_BGR24, m_width, m_height,
+                                             PIX_FMT_YUV420P, SWS_BICUBIC,
+                                             NULL, NULL, NULL);
+
+            //Set the encoder input buffer as the output
+            avpicture_fill((AVPicture*)m_omx_in,
+                                            in->pBuffer,
+                                            PIX_FMT_YUV420P,
+                                            m_width, m_height);
+            in->nFilledLen = in->nAllocLen;
+            //printf("YUV420P linesize: %d, %d, %d\n", m_omx_in->linesize[0], m_omx_in->linesize[1], m_omx_in->linesize[2]);
+
+            //Perform the transform
+            int linesize[4] = {mat.step, 0, 0, 0};
+            int ret = sws_scale(m_sws_ctx, (uint8_t **) &(mat.data),
+                            linesize, 0, in_height, m_omx_in->data, m_omx_in->linesize);
+            if (ret < 0) {
+                printf("SWSCALE FAILED!\n");
+            } else {
+                OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
+                in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
+            }
+        }
+
+        lock.lock();
+    }
+
+    in->nFilledLen = 0;
+    OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
+}
+
+void OmxCvImpl::output_worker() {
+    OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 0);
+    while (!m_stop || out != NULL) {
+        //static int i = 0;
 
         if (out != NULL) {
             if (out->nFilledLen > 0) {
@@ -216,9 +283,9 @@ void OmxCvImpl::worker() {
                 AVPacket pkt;
                 
                 //This doesn't seem to give anything useful
-                OMX_TICKS tick = out->nTimeStamp;
+                //OMX_TICKS tick = out->nTimeStamp;
 
-                printf("TICK: %lld\n", tick);
+                //printf("TICK: %lld\n", tick);
                 av_init_packet(&pkt);
                 pkt.stream_index = m_video_stream->index;
                 pkt.data= out->pBuffer;
@@ -241,55 +308,24 @@ void OmxCvImpl::worker() {
             //printf("Zero buffer received; sleeping...\n");
             sleep_for(milliseconds(300));
         }
+        out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 0);
     }
 }
 
 bool OmxCvImpl::process(const cv::Mat &mat) {
-    int ret;
-    
     //Well, we could just write out the raw H.264 stream and get mkvmerge to mux
     //it with these timecodes. So much simpler than libav...
+    auto now = steady_clock::now();
+    std::unique_lock<std::mutex> lock(m_input_mutex);
+
     if (m_frame_count++ == 0) {
-        fprintf(m_timecodes, "0\n");
-        m_frame_start = steady_clock::now();
-    } else {
-        int diff = TIMEDIFF(m_frame_start);
-        fprintf(m_timecodes, "%d\n", diff);
+        m_frame_start = now;
     }
 
-    auto start = steady_clock::now();
-    OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
-    if (in == NULL) {
-        printf("NO INPUT BUFFER");
-        return false;
-    }
-    int td = (int)TIMEDIFF(start);
-    if (td > 0) {
-        printf("Time to get buffer (ms): %d\n",td);
-    }
-    //Recheck the context
-    m_sws_ctx = sws_getCachedContext(m_sws_ctx, mat.cols, mat.rows,
-                                     PIX_FMT_BGR24, m_width, m_height,
-                                     PIX_FMT_YUV420P, SWS_BICUBIC,
-                                     NULL, NULL, NULL);
-
-    //Set the encoder input buffer as the output
-    avpicture_fill((AVPicture*)m_omx_in,
-                                    in->pBuffer,
-                                    PIX_FMT_YUV420P,
-                                    m_width, m_height);
-    in->nFilledLen = in->nAllocLen;
-    printf("YUV420P linesize: %d, %d, %d\n", m_omx_in->linesize[0], m_omx_in->linesize[1], m_omx_in->linesize[2]);
-
-    //Perform the transform
-    int linesize[4] = {mat.step, 0, 0, 0};
-    ret = sws_scale(m_sws_ctx, (uint8_t **) &(mat.data),
-                    linesize, 0, mat.rows, m_omx_in->data, m_omx_in->linesize);
-    if (ret < 0) {
-        return false;
-    }
-
-    OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
+    m_input_queue.push_back(std::pair<cv::Mat, uint64_t>(mat, duration_cast<milliseconds>(now-m_frame_start).count()));
+    lock.unlock();
+    m_input_signaller.notify_one();
+    
     return true;
 }
 
