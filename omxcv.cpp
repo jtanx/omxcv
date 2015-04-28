@@ -239,7 +239,7 @@ void OmxCvImpl::worker() {
             OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
         } else {
             //printf("Zero buffer received; sleeping...\n");
-            sleep_for(milliseconds(15));
+            sleep_for(milliseconds(300));
         }
     }
 }
@@ -257,12 +257,16 @@ bool OmxCvImpl::process(const cv::Mat &mat) {
         fprintf(m_timecodes, "%d\n", diff);
     }
 
+    auto start = steady_clock::now();
     OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
     if (in == NULL) {
         printf("NO INPUT BUFFER");
         return false;
     }
-
+    int td = (int)TIMEDIFF(start);
+    if (td > 0) {
+        printf("Time to get buffer (ms): %d\n",td);
+    }
     //Recheck the context
     m_sws_ctx = sws_getCachedContext(m_sws_ctx, mat.cols, mat.rows,
                                      PIX_FMT_BGR24, m_width, m_height,
