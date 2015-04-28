@@ -59,12 +59,12 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     m_video_stream->codec->bit_rate = bitrate;
     m_video_stream->codec->profile = FF_PROFILE_H264_HIGH;
     m_video_stream->codec->level = 41;
-    m_video_stream->codec->time_base.num = fpsden;
-    m_video_stream->codec->time_base.den = fpsnum;
+    m_video_stream->codec->time_base.num = 1;
+    m_video_stream->codec->time_base.den = 1000;
     m_video_stream->codec->pix_fmt = AV_PIX_FMT_YUV420P;
     
-    m_video_stream->time_base.num = fpsden;
-    m_video_stream->time_base.den = fpsnum;
+    m_video_stream->time_base.num = 1;
+    m_video_stream->time_base.den = 1000;
     
     m_video_stream->r_frame_rate.num = fpsnum;
     m_video_stream->r_frame_rate.den = fpsden;
@@ -168,7 +168,6 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     fprintf(m_timecodes, "# timecode format v2\n");
 
     //Start the worker thread for dumping the encoded data
-    m_output_worker = std::thread(&OmxCvImpl::output_worker, this);
     m_input_worker = std::thread(&OmxCvImpl::input_worker, this);
 }
 
@@ -176,7 +175,6 @@ OmxCvImpl::~OmxCvImpl() {
     m_stop = true;
     m_input_signaller.notify_one();
     m_input_worker.join();
-    m_output_worker.join();
 
     //Teardown similar to hello_encode
     ilclient_change_component_state(m_encoder_component, OMX_StateIdle);
@@ -201,6 +199,7 @@ OmxCvImpl::~OmxCvImpl() {
 void OmxCvImpl::input_worker() {
     std::unique_lock<std::mutex> lock(m_input_mutex);
     OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
+    OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 1);
 
     //FILE *fp = fopen("test.yuv", "wb");
     while (true) {
@@ -213,6 +212,7 @@ void OmxCvImpl::input_worker() {
             }
         }
 
+        //auto proc_start = steady_clock::now();
         if (m_input_queue.size() > 5) {
             printf("Queue too large; dropping frames!\n");
             while (m_input_queue.size() > 5) {
@@ -220,22 +220,15 @@ void OmxCvImpl::input_worker() {
             }
         }
 
-        std::pair<cv::Mat, uint64_t> frame = m_input_queue.front();
+        std::pair<cv::Mat, int64_t> frame = m_input_queue.front();
         cv::Mat mat = frame.first;
         m_input_queue.pop_front();
         lock.unlock();
 
         fprintf(m_timecodes, "%llu\n", frame.second);
-
-        auto start = steady_clock::now();
         if (in == NULL) {
             printf("NO INPUT BUFFER");
         } else {
-            int td = (int)TIMEDIFF(start);
-            if (td > 0) {
-                printf("Time to get buffer (ms): %d\n",td);
-            }
-
             //fwrite(mat.data, mat.step, mat.rows, fp);
             int in_width = (mat.cols / 32) * 32, in_height = (mat.rows / 16) * 16;
             //Recheck the context
@@ -254,69 +247,72 @@ void OmxCvImpl::input_worker() {
             //fwrite(in->pBuffer, in->nFilledLen, 1, fp);
             //Perform the transform
             int linesize[4] = {mat.step, 0, 0, 0};
-            int ret = sws_scale(m_sws_ctx, (uint8_t **) &(mat.data),
+            sws_scale(m_sws_ctx, (uint8_t **) &(mat.data),
                             linesize, 0, in_height, m_omx_in->data, m_omx_in->linesize);
-            if (ret < 0) {
-                printf("SWSCALE FAILED!\n");
-            } else {
-                OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
-                in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
-            }
+
+            OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
+            //printf("Encoding time (ms): %d\n", (int)TIMEDIFF(proc_start));
+            do {
+                OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
+                out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 1);
+            } while (!write_data(out, frame.second));
+            in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
         }
 
         lock.lock();
+        //printf("Total processing time (ms): %d\n", (int)TIMEDIFF(proc_start));
     }
 
     //fclose(fp);
     in->nFilledLen = 0;
     OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
+    OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
 }
 
-void OmxCvImpl::output_worker() {
-    OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 1);
-    while (!m_stop || out != NULL) {
-        //static int i = 0;
+bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
+    bool ret = false;
 
-        if (out != NULL) {
-            static const uint8_t header_sig[] = {0,0,0,1};
+    if (out != NULL) {
+        static const uint8_t header_sig[] = {0,0,0,1};
+        static int64_t last_pts = 0;
 
-            if (out->nFilledLen > 0) {
-                static int pkt_count = 0, pkt_offset = 0;
-                AVPacket pkt;
+        if (out->nFilledLen > 0) {
+            static int pkt_offset = 0;
+            AVPacket pkt;
+            ret = true;
 
-                //Check for an SPS/PPS header
-                if (out->nFilledLen > 5 && !memcmp(out->pBuffer, header_sig, 4)) {
-                    uint8_t naltype = out->pBuffer[4] & 0x1f;
-                    if (naltype == 7 || naltype == 8) {
-                        pkt_offset++;
-                    }
+            //Check for an SPS/PPS header
+            if (out->nFilledLen > 5 && !memcmp(out->pBuffer, header_sig, 4)) {
+                uint8_t naltype = out->pBuffer[4] & 0x1f;
+                if (naltype == 7 || naltype == 8) {
+                    ret = false;
                 }
-
-                //This doesn't seem to give anything useful
-                //OMX_TICKS tick = out->nTimeStamp;
-
-                //printf("TICK: %lld\n", tick);
-                av_init_packet(&pkt);
-                pkt.stream_index = m_video_stream->index;
-                pkt.data= out->pBuffer;
-                pkt.size= out->nFilledLen;
-
-                if (out->nFlags & OMX_BUFFERFLAG_SYNCFRAME) {
-                    pkt.flags |= AV_PKT_FLAG_KEY;
-                }
-
-                pkt.pts = pkt_count++;
-
-                av_write_frame(m_mux_ctx, &pkt);
-                out->nFilledLen = 0;
             }
-            OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
-        } else {
-            //printf("Zero buffer received; sleeping...\n");
-            sleep_for(milliseconds(300));
+
+            av_init_packet(&pkt);
+            pkt.stream_index = m_video_stream->index;
+            pkt.data= out->pBuffer;
+            pkt.size= out->nFilledLen;
+
+            if (out->nFlags & OMX_BUFFERFLAG_SYNCFRAME) {
+                pkt.flags |= AV_PKT_FLAG_KEY;
+            }
+
+            pkt.pts = timestamp + pkt_offset;
+            if (!ret) { //Increment the offset if this is not a 'frame'
+                pkt_offset++;
+            } else if (pkt.pts == last_pts) {
+                printf("SHIT\n");
+                pkt.pts++;
+                pkt_offset++;
+            }
+
+            last_pts = pkt.pts;
+            av_write_frame(m_mux_ctx, &pkt);
+            out->nFilledLen = 0;
         }
-        out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 0);
     }
+    return ret;
 }
 
 bool OmxCvImpl::process(const cv::Mat &mat) {
@@ -331,7 +327,7 @@ bool OmxCvImpl::process(const cv::Mat &mat) {
         m_frame_start = now;
     }
 
-    m_input_queue.push_back(std::pair<cv::Mat, uint64_t>(ours, duration_cast<milliseconds>(now-m_frame_start).count()));
+    m_input_queue.push_back(std::pair<cv::Mat, int64_t>(ours, duration_cast<milliseconds>(now-m_frame_start).count()));
     lock.unlock();
     m_input_signaller.notify_one();
     
@@ -357,12 +353,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     //We can try to set these, but the camera may ignore this anyway...
-    capture.set(CV_CAP_PROP_FOURCC, CV_FOURCC('M', 'J', 'P', 'G'));
     capture.set(CV_CAP_PROP_FRAME_WIDTH, width);
     capture.set(CV_CAP_PROP_FRAME_HEIGHT, height);
     capture.set(CV_CAP_PROP_FPS, 30);
     
-    OmxCvImpl e((const char*)"save.mp4", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
+    OmxCvImpl e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
     
     auto totstart = steady_clock::now();
     cv::Mat image;
@@ -370,7 +365,8 @@ int main(int argc, char *argv[]) {
         capture >> image;
         auto start = steady_clock::now();
         e.process(image);
-        printf("Processed frame %d (%d ms)\n", i+1, (int)TIMEDIFF(start));
+        printf("Processed frame %d (%d ms)\r", i+1, (int)TIMEDIFF(start));
+        fflush(stdout);
     }
 
     printf("Average FPS: %.2f\n", (framecount * 1000) / (float)TIMEDIFF(totstart));

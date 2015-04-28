@@ -56,11 +56,9 @@ namespace omxcv {
             SwsContext *m_sws_ctx;
 
             std::condition_variable m_input_signaller;
-            std::deque<std::pair<cv::Mat, uint64_t>> m_input_queue;
+            std::deque<std::pair<cv::Mat, int64_t>> m_input_queue;
             std::thread m_input_worker;
             std::mutex  m_input_mutex;
-
-            std::thread m_output_worker;
             std::atomic<bool> m_stop;
             
             /** The OpenMAX IL client **/
@@ -76,7 +74,7 @@ namespace omxcv {
             int m_frame_count;
 
             void input_worker();
-            void output_worker();
+            bool write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp);
             bool lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden);
     };
 }
