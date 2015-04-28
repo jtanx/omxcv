@@ -13,6 +13,7 @@ using std::chrono::duration_cast;
 
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <chrono>
 #include <thread>
 
@@ -41,7 +42,7 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
         return false;
     }
     m_mux_ctx->debug = 1;
-    m_mux_ctx->start_time_realtime = AV_NOPTS_VALUE;
+    m_mux_ctx->start_time_realtime = time(NULL); //NOW
     m_mux_ctx->start_time = AV_NOPTS_VALUE;
     m_mux_ctx->duration = 0;
     m_mux_ctx->bit_rate = 0;
@@ -60,14 +61,15 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     m_video_stream->codec->bit_rate = bitrate;
     m_video_stream->codec->profile = FF_PROFILE_H264_HIGH;
     m_video_stream->codec->level = 41;
-    m_video_stream->codec->time_base.num = fpsnum;
-    m_video_stream->codec->time_base.den = fpsden;
+    m_video_stream->codec->time_base.num = fpsden;
+    m_video_stream->codec->time_base.den = fpsnum;
+    m_video_stream->codec->pix_fmt = AV_PIX_FMT_YUV420P;
     
-    m_video_stream->time_base.num = fpsnum;
-    m_video_stream->time_base.den = fpsden;
+    m_video_stream->time_base.num = fpsden;
+    m_video_stream->time_base.den = fpsnum;
     
-    m_video_stream->r_frame_rate.num = fpsnum;
-    m_video_stream->r_frame_rate.den = fpsden;
+    m_video_stream->r_frame_rate.num = fpsden;
+    m_video_stream->r_frame_rate.den = fpsnum;
     
     m_video_stream->start_time = AV_NOPTS_VALUE;
 
@@ -211,9 +213,9 @@ void OmxCvImpl::input_worker() {
             }
         }
 
-        if (m_input_queue.size() > 30) {
+        if (m_input_queue.size() > 5) {
             printf("Queue too large; dropping frames!\n");
-            while (m_input_queue.size() > 30) {
+            while (m_input_queue.size() > 5) {
                 m_input_queue.pop_front();
             }
         }
@@ -271,26 +273,13 @@ void OmxCvImpl::input_worker() {
 }
 
 void OmxCvImpl::output_worker() {
-    OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 0);
+    OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 1);
     while (!m_stop || out != NULL) {
         //static int i = 0;
 
         if (out != NULL) {
             if (out->nFilledLen > 0) {
-                //Check for an SPS/PPS header
-                static const uint8_t header_sig[] = {0,0,0,1};
-                if (out->nFilledLen > 5 && !memcmp(out->pBuffer, header_sig, 4)) {
-                    if (out->pBuffer[4] == 0x67) {
-                        //SPS - DO NOTHING RIGHT NOW
-                        out->nFilledLen = 0;
-                        continue;
-                    } else if (out->pBuffer[4] == 0x8) {
-                        //PPS
-                        out->nFilledLen = 0;
-                        continue;
-                    }
-                }
-
+                static int i = 0;
                 AVPacket pkt;
                 
                 //This doesn't seem to give anything useful
@@ -306,6 +295,7 @@ void OmxCvImpl::output_worker() {
                     pkt.flags |= AV_PKT_FLAG_KEY;
                 }
 
+                pkt.pts = i++;
                 /*
                 pkt.pts = i++;
                 pkt.dts = AV_NOPTS_VALUE;
