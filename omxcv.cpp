@@ -44,8 +44,6 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     m_mux_ctx->debug = 1;
     m_mux_ctx->start_time_realtime = time(NULL); //NOW
     m_mux_ctx->start_time = AV_NOPTS_VALUE;
-    m_mux_ctx->duration = 0;
-    m_mux_ctx->bit_rate = 0;
     m_mux_ctx->oformat = fmt;
     snprintf(m_mux_ctx->filename, sizeof(m_mux_ctx->filename), "%s", filename);
 
@@ -68,8 +66,8 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     m_video_stream->time_base.num = fpsden;
     m_video_stream->time_base.den = fpsnum;
     
-    m_video_stream->r_frame_rate.num = fpsden;
-    m_video_stream->r_frame_rate.den = fpsnum;
+    m_video_stream->r_frame_rate.num = fpsnum;
+    m_video_stream->r_frame_rate.den = fpsden;
     
     m_video_stream->start_time = AV_NOPTS_VALUE;
 
@@ -193,6 +191,8 @@ OmxCvImpl::~OmxCvImpl() {
     ilclient_destroy(m_ilclient);
 
     //Close the output file
+    av_write_trailer(m_mux_ctx);
+    avcodec_close(m_video_stream->codec);
     avio_close(m_mux_ctx->pb);
     avformat_free_context(m_mux_ctx);
     fclose(m_timecodes);
@@ -278,10 +278,20 @@ void OmxCvImpl::output_worker() {
         //static int i = 0;
 
         if (out != NULL) {
+            static const uint8_t header_sig[] = {0,0,0,1};
+
             if (out->nFilledLen > 0) {
-                static int i = 0;
+                static int pkt_count = 0, pkt_offset = 0;
                 AVPacket pkt;
-                
+
+                //Check for an SPS/PPS header
+                if (out->nFilledLen > 5 && !memcmp(out->pBuffer, header_sig, 4)) {
+                    uint8_t naltype = out->pBuffer[4] & 0x1f;
+                    if (naltype == 7 || naltype == 8) {
+                        pkt_offset++;
+                    }
+                }
+
                 //This doesn't seem to give anything useful
                 //OMX_TICKS tick = out->nTimeStamp;
 
@@ -295,12 +305,8 @@ void OmxCvImpl::output_worker() {
                     pkt.flags |= AV_PKT_FLAG_KEY;
                 }
 
-                pkt.pts = i++;
-                /*
-                pkt.pts = i++;
-                pkt.dts = AV_NOPTS_VALUE;
-                */
-                
+                pkt.pts = pkt_count++;
+
                 av_write_frame(m_mux_ctx, &pkt);
                 out->nFilledLen = 0;
             }
@@ -356,7 +362,7 @@ int main(int argc, char *argv[]) {
     capture.set(CV_CAP_PROP_FRAME_HEIGHT, height);
     capture.set(CV_CAP_PROP_FPS, 30);
     
-    OmxCvImpl e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
+    OmxCvImpl e((const char*)"save.mp4", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
     
     auto totstart = steady_clock::now();
     cv::Mat image;
