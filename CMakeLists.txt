@@ -31,20 +31,25 @@ link_directories (/opt/vc/lib /opt/vc/src/hello_pi/libs/ilclient)
 
 #Compile options
 if (CMAKE_COMPILER_IS_GNUCXX)
-	set (CMAKE_CXX_FLAGS "-Wall -Wno-variadic-macros -std=c++11 -pedantic -pg")#dwarf-3")
+	set (CMAKE_CXX_FLAGS "-Wall -Wno-variadic-macros -std=c++11 -pedantic -O2 -pg")#gdwarf-3")
 endif (CMAKE_COMPILER_IS_GNUCXX)
 
 #Source files
 set (HEADERS
     omxcv.h
+    image_gpu.h
 )
 
 set (SOURCE
+    image_gpu.cpp
     omxcv.cpp
+    bgr2rgb.s
 )
 
 add_executable (omxcv ${HEADERS} ${SOURCE})
+set_property(SOURCE bgr2rgb.s PROPERTY LANGUAGE C)
 
+target_link_libraries (omxcv EGL GLESv2)
 target_link_libraries (omxcv ${LIBAVFORMAT_LIBRARIES} ${LIBAVCODEC_LIBRARIES} ${LIBAVUTIL_LIBRARIES} ${LIBSWSCALE_LIBRARIES} ${OpenCV_LIBS})
 target_link_libraries (omxcv bcm_host openmaxil bcm_host vcos vchiq_arm ilclient)
 target_link_libraries (omxcv ${CMAKE_THREAD_LIBS_INIT})

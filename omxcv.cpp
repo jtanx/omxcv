@@ -4,6 +4,7 @@
  */
 
 #include "omxcv-impl.h"
+#include "image_gpu.h"
 using namespace omxcv;
 
 using std::this_thread::sleep_for;
@@ -123,7 +124,7 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     def.format.video.nSliceHeight = m_height;
     //Must be a multiple of 32
     def.format.video.nStride = m_width;
-    def.format.video.eColorFormat = OMX_COLOR_FormatYUV420PackedPlanar;
+    def.format.video.eColorFormat =  OMX_COLOR_Format24bitBGR888; //OMX_COLOR_Format32bitABGR8888;//OMX_COLOR_FormatYUV420PackedPlanar;
 
     OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
                      OMX_IndexParamPortDefinition, &def);
@@ -229,18 +230,21 @@ void OmxCvImpl::input_worker() {
         if (in == NULL) {
             printf("NO INPUT BUFFER");
         } else {
+            
+            auto sws_start = steady_clock::now();
+            /*
             //fwrite(mat.data, mat.step, mat.rows, fp);
             int in_width = (mat.cols / 32) * 32, in_height = (mat.rows / 16) * 16;
-            //Recheck the context
+            //Recheck the context //PIX_FMT_RGBA for OMX_COLOR_Format32bitABGR8888, PIX_FMT_RGB24 for OMX_COLOR_Format24bitBGR888
             m_sws_ctx = sws_getCachedContext(m_sws_ctx, in_width, in_height,
                                              PIX_FMT_BGR24, m_width, m_height,
-                                             PIX_FMT_YUV420P, SWS_BICUBIC,
+                                             PIX_FMT_RGB24, SWS_BICUBIC,
                                              NULL, NULL, NULL);
 
             //Set the encoder input buffer as the output
             avpicture_fill((AVPicture*)m_omx_in,
                                             in->pBuffer,
-                                            PIX_FMT_YUV420P,
+                                            PIX_FMT_RGB24,
                                             m_width, m_height);
             in->nFilledLen = in->nAllocLen;
             //printf("YUV420P linesize: %d, %d, %d\n", m_omx_in->linesize[0], m_omx_in->linesize[1], m_omx_in->linesize[2]);
@@ -249,7 +253,15 @@ void OmxCvImpl::input_worker() {
             int linesize[4] = {mat.step, 0, 0, 0};
             sws_scale(m_sws_ctx, (uint8_t **) &(mat.data),
                             linesize, 0, in_height, m_omx_in->data, m_omx_in->linesize);
-
+            */
+            
+            cv::cvtColor(mat, mat, CV_BGR2RGB);
+            memcpy(in->pBuffer, mat.data, mat.step * mat.rows);
+            in->nFilledLen = mat.step * mat.rows;
+            
+            printf("SWS time (ms): %-3d\r", (int)TIMEDIFF(sws_start));
+            fflush(stdout);
+            
             OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
             //printf("Encoding time (ms): %d\n", (int)TIMEDIFF(proc_start));
             do {
@@ -363,11 +375,16 @@ int main(int argc, char *argv[]) {
     cv::Mat image;
     for(int i = 0; i < framecount; i++) {
         capture >> image;
-        auto start = steady_clock::now();
+        //auto start = steady_clock::now();
         e.process(image);
-        printf("Processed frame %d (%d ms)\r", i+1, (int)TIMEDIFF(start));
-        fflush(stdout);
+        //printf("Processed frame %d (%d ms)\r", i+1, (int)TIMEDIFF(start));
+        //fflush(stdout);
     }
+
+    //FILE *fp = fopen("Orig.rgb", "wb");
+    //fwrite(image.data, 3 * image.cols * image.rows, 1, fp);
+    //fclose(fp);
+    //picopter::DisplayShit(image.cols, image.rows, image.data);
 
     printf("Average FPS: %.2f\n", (framecount * 1000) / (float)TIMEDIFF(totstart));
     printf("DEPTH: %d, WIDTH: %d, HEIGHT: %d, IW: %d\n", image.depth(), image.cols, image.rows, static_cast<int>(image.step));
