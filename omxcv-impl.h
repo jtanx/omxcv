@@ -51,7 +51,7 @@ namespace omxcv {
             
             bool process(const cv::Mat &mat);
         private:
-            int m_width, m_height, m_fpsnum, m_fpsden;
+            int m_width, m_height, m_stride, m_fpsnum, m_fpsden;
             AVFrame *m_omx_in;
             SwsContext *m_sws_ctx;
 

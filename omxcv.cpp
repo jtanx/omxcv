@@ -96,13 +96,19 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
 {
     bcm_host_init();
     OMX_Init();
+    /*
     //Imposed restrictions due to slice height and stride width 
     m_width = (width / 32) * 32;
     m_height = (height / 16) * 16;
     if (m_width != width || m_height != height) {
         printf("Warning: Crop necessary to %dx%d due to width/height not being a multiple of 32/16.\n",
                m_width, m_height);
-    }
+    }*/
+
+    m_width = width;
+    m_height = height;
+    m_stride = (m_width + 31) & ~31; //Must be a multiple of 32
+
     m_ilclient = ilclient_init();
     ilclient_create_component(m_ilclient, &m_encoder_component, (char*)"video_encode", 
                           (ILCLIENT_CREATE_FLAGS_T)(ILCLIENT_DISABLE_ALL_PORTS | 
@@ -121,9 +127,9 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     def.format.video.nFrameHeight = m_height;
     def.format.video.xFramerate = 25 << 16;
     //Must be a multiple of 16
-    def.format.video.nSliceHeight = m_height;
+    def.format.video.nSliceHeight = (m_height + 15) & ~15;
     //Must be a multiple of 32
-    def.format.video.nStride = m_width;
+    def.format.video.nStride = m_stride;
     def.format.video.eColorFormat =  OMX_COLOR_Format24bitBGR888; //OMX_COLOR_Format32bitABGR8888;//OMX_COLOR_FormatYUV420PackedPlanar;
 
     OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
@@ -254,10 +260,10 @@ void OmxCvImpl::input_worker() {
             sws_scale(m_sws_ctx, (uint8_t **) &(mat.data),
                             linesize, 0, in_height, m_omx_in->data, m_omx_in->linesize);
             */
-            
-            cv::cvtColor(mat, mat, CV_BGR2RGB);
-            memcpy(in->pBuffer, mat.data, mat.step * mat.rows);
-            in->nFilledLen = mat.step * mat.rows;
+
+            cv::Mat omat(mat.rows, mat.cols, CV_8UC3, in->pBuffer, m_stride * 3);
+            cv::cvtColor(mat, omat, CV_BGR2RGB);
+            in->nFilledLen = omat.step * omat.rows;
             
             printf("SWS time (ms): %-3d\r", (int)TIMEDIFF(sws_start));
             fflush(stdout);
