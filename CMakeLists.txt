@@ -24,6 +24,11 @@ link_directories (${LIBAVUTIL_LIBRARY_DIRS})
 include_directories (${LIBSWSCALE_INCLUDE_DIRS})
 link_directories (${LIBSWSCALE_LIBRARY_DIRS})
 
+#Optional libraries
+pkg_check_modules (LIBTCMALLOC libtcmalloc)
+include_directories (${LIBTCMALLOC_INCLUDE_DIRS}})
+link_directories (${LIBTCMALLOC_LIBRARY_DIRS})
+
 #Raspberry Pi specific includes.
 #Requires the installation of the userland package.
 include_directories (/opt/vc/include /opt/vc/src/hello_pi/libs/ilclient /opt/vc/include/interface/vcos/pthreads /opt/vc/include/interface/vmcs_host/linux)
@@ -31,7 +36,7 @@ link_directories (/opt/vc/lib /opt/vc/src/hello_pi/libs/ilclient)
 
 #Compile options
 if (CMAKE_COMPILER_IS_GNUCXX)
-	set (CMAKE_CXX_FLAGS "-Wall -Wno-variadic-macros -std=c++11 -pedantic -O2 -gdwarf-3")
+	set (CMAKE_CXX_FLAGS "-Wall -Wno-variadic-macros -std=c++11 -pedantic -gdwarf-3")
 endif (CMAKE_COMPILER_IS_GNUCXX)
 
 #Source files
@@ -53,3 +58,4 @@ target_link_libraries (omxcv EGL GLESv2)
 target_link_libraries (omxcv ${LIBAVFORMAT_LIBRARIES} ${LIBAVCODEC_LIBRARIES} ${LIBAVUTIL_LIBRARIES} ${LIBSWSCALE_LIBRARIES} ${OpenCV_LIBS})
 target_link_libraries (omxcv bcm_host openmaxil bcm_host vcos vchiq_arm ilclient)
 target_link_libraries (omxcv ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries (omxcv ${LIBTCMALLOC_LIBRARIES} -lprofiler)

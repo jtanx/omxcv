@@ -105,9 +105,14 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
                m_width, m_height);
     }*/
 
-    m_width = width;
+    m_width = width & ~31;
     m_height = height;
-    m_stride = (m_width + 31) & ~31; //Must be a multiple of 32
+    m_stride = m_width; //Must be a multiple of 32. Except ilclient doesn't allocate a larger buffer if stride > width...
+
+    if (m_width != width) {
+        printf("Warning: Crop necessary to %dx%d due to width not being a multiple of 32.\n",
+               m_width, m_height);
+    }
 
     m_ilclient = ilclient_init();
     ilclient_create_component(m_ilclient, &m_encoder_component, (char*)"video_encode", 
@@ -261,11 +266,13 @@ void OmxCvImpl::input_worker() {
                             linesize, 0, in_height, m_omx_in->data, m_omx_in->linesize);
             */
 
+            mat.cols &= ~31; //Crop to modulo 32.
             cv::Mat omat(mat.rows, mat.cols, CV_8UC3, in->pBuffer, m_stride * 3);
             cv::cvtColor(mat, omat, CV_BGR2RGB);
             in->nFilledLen = omat.step * omat.rows;
             
-            printf("SWS time (ms): %-3d\r", (int)TIMEDIFF(sws_start));
+            static int framecounter = 0;
+            printf("SWS time (ms): %-3d [%d]\r", (int)TIMEDIFF(sws_start), ++framecounter);
             fflush(stdout);
             
             OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
