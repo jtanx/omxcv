@@ -24,7 +24,6 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     int ret;
 
     av_register_all();
-    //Do we need to free this?
     AVOutputFormat *fmt = av_guess_format(NULL, filename, NULL);
     if (fmt == NULL) {
         return false;
@@ -42,6 +41,7 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
 
     m_video_stream = avformat_new_stream(m_mux_ctx, NULL);
     if (m_video_stream == NULL) {
+        avformat_free_context(m_mux_ctx);
         return false;
     }
 
@@ -68,6 +68,8 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     m_video_stream->codec->sample_aspect_ratio.den = m_video_stream->sample_aspect_ratio.den;
 
     if (avio_open(&m_mux_ctx->pb, filename, AVIO_FLAG_WRITE) < 0) {
+        avcodec_close(m_video_stream->codec);
+        avformat_free_context(m_mux_ctx);
         return 0;
     }
 
@@ -91,11 +93,6 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     m_width = width;
     m_height = height;
     m_stride = ((m_width + 31) & ~31) * 3;
-
-    if (m_width != width) {
-        printf("Warning: Crop necessary to %dx%d due to width not being a multiple of 32.\n",
-               m_width, m_height);
-    }
 
     m_ilclient = ilclient_init();
     ilclient_create_component(m_ilclient, &m_encoder_component, (char*)"video_encode", 
