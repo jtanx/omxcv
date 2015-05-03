@@ -13,7 +13,6 @@ find_package (Threads REQUIRED) # For pthreads
 pkg_check_modules (LIBAVFORMAT libavformat REQUIRED)
 pkg_check_modules (LIBAVCODEC libavcodec REQUIRED)
 pkg_check_modules (LIBAVUTIL libavutil REQUIRED)
-pkg_check_modules (LIBSWSCALE libswscale REQUIRED)
 
 include_directories (${LIBAVFORMAT_INCLUDE_DIRS})
 link_directories (${LIBAVFORMAT_LIBRARY_DIRS})
@@ -21,8 +20,6 @@ include_directories (${LIBAVCODEC_INCLUDE_DIRS})
 link_directories (${LIBAVCODEC_LIBRARY_DIRS})
 include_directories (${LIBAVUTIL_INCLUDE_DIRS})
 link_directories (${LIBAVUTIL_LIBRARY_DIRS})
-include_directories (${LIBSWSCALE_INCLUDE_DIRS})
-link_directories (${LIBSWSCALE_LIBRARY_DIRS})
 
 #Optional libraries
 pkg_check_modules (LIBTCMALLOC libtcmalloc)
@@ -55,7 +52,7 @@ add_executable (omxcv ${HEADERS} ${SOURCE})
 set_property(SOURCE bgr2rgb.s PROPERTY LANGUAGE C)
 
 target_link_libraries (omxcv EGL GLESv2)
-target_link_libraries (omxcv ${LIBAVFORMAT_LIBRARIES} ${LIBAVCODEC_LIBRARIES} ${LIBAVUTIL_LIBRARIES} ${LIBSWSCALE_LIBRARIES} ${OpenCV_LIBS})
+target_link_libraries (omxcv ${LIBAVFORMAT_LIBRARIES} ${LIBAVCODEC_LIBRARIES} ${LIBAVUTIL_LIBRARIES} ${OpenCV_LIBS})
 target_link_libraries (omxcv bcm_host openmaxil bcm_host vcos vchiq_arm ilclient)
 target_link_libraries (omxcv ${CMAKE_THREAD_LIBS_INIT})
 target_link_libraries (omxcv ${LIBTCMALLOC_LIBRARIES} -lprofiler)

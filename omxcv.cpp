@@ -23,15 +23,7 @@ using std::chrono::duration_cast;
 bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden) {
     int ret;
 
-    //Allocate an AVFrame for conversion to YUV colurspace
-    m_omx_in = OMXCV_AV_FRAME_ALLOC();
-    if (m_omx_in == NULL) {
-        return false;
-    }
-
-
     av_register_all();
-
     //Do we need to free this?
     AVOutputFormat *fmt = av_guess_format(NULL, filename, NULL);
     if (fmt == NULL) {
@@ -91,23 +83,14 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
 }
 
 OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int fpsnum, int fpsden)
-: m_sws_ctx(NULL)
-, m_stop{false}
+: m_stop{false}
 {
     bcm_host_init();
     OMX_Init();
-    /*
-    //Imposed restrictions due to slice height and stride width 
-    m_width = (width / 32) * 32;
-    m_height = (height / 16) * 16;
-    if (m_width != width || m_height != height) {
-        printf("Warning: Crop necessary to %dx%d due to width/height not being a multiple of 32/16.\n",
-               m_width, m_height);
-    }*/
 
-    m_width = width & ~31;
+    m_width = width;
     m_height = height;
-    m_stride = m_width; //Must be a multiple of 32. Except ilclient doesn't allocate a larger buffer if stride > width...
+    m_stride = ((m_width + 31) & ~31) * 3;
 
     if (m_width != width) {
         printf("Warning: Crop necessary to %dx%d due to width not being a multiple of 32.\n",
@@ -136,6 +119,8 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     //Must be a multiple of 32
     def.format.video.nStride = m_stride;
     def.format.video.eColorFormat =  OMX_COLOR_Format24bitBGR888; //OMX_COLOR_Format32bitABGR8888;//OMX_COLOR_FormatYUV420PackedPlanar;
+    //Must be manually defined to ensure sufficient size if stride needs to be rounded up to multiple of 32.
+    def.nBufferSize = def.format.video.nStride * def.format.video.nSliceHeight;
 
     OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
                      OMX_IndexParamPortDefinition, &def);
@@ -159,7 +144,6 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     bitrate_type.nPortIndex = OMX_ENCODE_PORT_OUT;
     OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
                      OMX_IndexParamVideoBitrate, &bitrate_type);
-
 
     ilclient_change_component_state(m_encoder_component, OMX_StateIdle);
     ilclient_enable_port_buffers(m_encoder_component, OMX_ENCODE_PORT_IN, NULL, NULL, NULL);
@@ -237,42 +221,20 @@ void OmxCvImpl::input_worker() {
         m_input_queue.pop_front();
         lock.unlock();
 
+        //Well, we could just write out the raw H.264 stream and get mkvmerge to mux
+        //it with these timecodes. So much simpler than libav...
         fprintf(m_timecodes, "%llu\n", frame.second);
         if (in == NULL) {
             printf("NO INPUT BUFFER");
         } else {
             
-            auto sws_start = steady_clock::now();
-            /*
-            //fwrite(mat.data, mat.step, mat.rows, fp);
-            int in_width = (mat.cols / 32) * 32, in_height = (mat.rows / 16) * 16;
-            //Recheck the context //PIX_FMT_RGBA for OMX_COLOR_Format32bitABGR8888, PIX_FMT_RGB24 for OMX_COLOR_Format24bitBGR888
-            m_sws_ctx = sws_getCachedContext(m_sws_ctx, in_width, in_height,
-                                             PIX_FMT_BGR24, m_width, m_height,
-                                             PIX_FMT_RGB24, SWS_BICUBIC,
-                                             NULL, NULL, NULL);
-
-            //Set the encoder input buffer as the output
-            avpicture_fill((AVPicture*)m_omx_in,
-                                            in->pBuffer,
-                                            PIX_FMT_RGB24,
-                                            m_width, m_height);
-            in->nFilledLen = in->nAllocLen;
-            //printf("YUV420P linesize: %d, %d, %d\n", m_omx_in->linesize[0], m_omx_in->linesize[1], m_omx_in->linesize[2]);
-            //fwrite(in->pBuffer, in->nFilledLen, 1, fp);
-            //Perform the transform
-            int linesize[4] = {mat.step, 0, 0, 0};
-            sws_scale(m_sws_ctx, (uint8_t **) &(mat.data),
-                            linesize, 0, in_height, m_omx_in->data, m_omx_in->linesize);
-            */
-
-            mat.cols &= ~31; //Crop to modulo 32.
-            cv::Mat omat(mat.rows, mat.cols, CV_8UC3, in->pBuffer, m_stride * 3);
+            auto conv_start = steady_clock::now();
+            cv::Mat omat(mat.rows, mat.cols, CV_8UC3, in->pBuffer, m_stride);
             cv::cvtColor(mat, omat, CV_BGR2RGB);
-            in->nFilledLen = omat.step * omat.rows;
+            in->nFilledLen = in->nAllocLen;
             
             static int framecounter = 0;
-            printf("SWS time (ms): %-3d [%d]\r", (int)TIMEDIFF(sws_start), ++framecounter);
+            printf("BGR2RGB time (ms): %-3d [%d]\r", (int)TIMEDIFF(conv_start), ++framecounter);
             fflush(stdout);
             
             OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
@@ -341,8 +303,6 @@ bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
 }
 
 bool OmxCvImpl::process(const cv::Mat &mat) {
-    //Well, we could just write out the raw H.264 stream and get mkvmerge to mux
-    //it with these timecodes. So much simpler than libav...
     cv::Mat ours = mat.clone();
 
     auto now = steady_clock::now();
