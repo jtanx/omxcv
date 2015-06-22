@@ -45,11 +45,9 @@ set (HEADERS
 set (SOURCE
     image_gpu.cpp
     omxcv.cpp
-    bgr2rgb.s
 )
 
 add_executable (omxcv ${HEADERS} ${SOURCE})
-set_property(SOURCE bgr2rgb.s PROPERTY LANGUAGE C)
 
 target_link_libraries (omxcv EGL GLESv2)
 target_link_libraries (omxcv ${LIBAVFORMAT_LIBRARIES} ${LIBAVCODEC_LIBRARIES} ${LIBAVUTIL_LIBRARIES} ${OpenCV_LIBS})
