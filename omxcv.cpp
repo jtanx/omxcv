@@ -3,8 +3,8 @@
  * @brief Routines to perform hardware accelerated H.264 encoding on the RPi.
  */
 
+#include "omxcv.h"
 #include "omxcv-impl.h"
-#include "image_gpu.h"
 using namespace omxcv;
 
 using std::this_thread::sleep_for;
@@ -20,6 +20,16 @@ using std::chrono::duration_cast;
 
 #define TIMEDIFF(start) (duration_cast<milliseconds>(steady_clock::now() - start).count())
 
+/**
+ * Initialise LibAVCodec output muxer.
+ * @param [in] filename The filename to save to.
+ * @param [in] width The width of the video.
+ * @param [in] height The height of the video.
+ * @param [in] bitrate The bitrate of the video, in Kbps.
+ * @param [in] fpsnum The FPS numerator.
+ * @param [in] fpsden The FPS denominator.
+ * @return true iff initialised.
+ */
 bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden) {
     int ret;
 
@@ -47,7 +57,7 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
 
     m_video_stream->codec->width = width;
     m_video_stream->codec->height = height;
-    m_video_stream->codec->codec_id = CODEC_ID_H264;
+    m_video_stream->codec->codec_id = AV_CODEC_ID_H264;
     m_video_stream->codec->codec_type = AVMEDIA_TYPE_VIDEO;
     m_video_stream->codec->bit_rate = bitrate;
     m_video_stream->codec->profile = FF_PROFILE_H264_HIGH;
@@ -59,8 +69,8 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     m_video_stream->time_base.num = 1;
     m_video_stream->time_base.den = 1000;
     
-    m_video_stream->r_frame_rate.num = fpsnum;
-    m_video_stream->r_frame_rate.den = fpsden;
+    //m_video_stream->r_frame_rate.num = fpsnum;
+    //m_video_stream->r_frame_rate.den = fpsden;
     
     m_video_stream->start_time = AV_NOPTS_VALUE;
 
@@ -84,6 +94,15 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     return true;
 }
 
+/**
+ * Constructor.
+ * @param [in] name The file to save to.
+ * @param [in] width The video width.
+ * @param [in] height The video height.
+ * @param [in] bitrate The bitrate, in Kbps.
+ * @param [in] fpsnum The FPS numerator.
+ * @param [in] fpsden The FPS denominator.
+ */
 OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int fpsnum, int fpsden)
 : m_stop{false}
 {
@@ -164,6 +183,10 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     m_input_worker = std::thread(&OmxCvImpl::input_worker, this);
 }
 
+/**
+ * Destructor.
+ * @return Return_Description
+ */
 OmxCvImpl::~OmxCvImpl() {
     m_stop = true;
     m_input_signaller.notify_one();
@@ -189,6 +212,9 @@ OmxCvImpl::~OmxCvImpl() {
     fclose(m_timecodes);
 }
 
+/**
+ * Input encoding routine.
+ */
 void OmxCvImpl::input_worker() {
     std::unique_lock<std::mutex> lock(m_input_mutex);
     OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
@@ -253,6 +279,12 @@ void OmxCvImpl::input_worker() {
     OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
 }
 
+/**
+ * Output muxing routine.
+ * @param [in] out Buffer to be saved.
+ * @param [in] timestamp Timestamp of this buffer.
+ * @return true if buffer was saved.
+ */
 bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
     bool ret = false;
 
@@ -299,6 +331,11 @@ bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
     return ret;
 }
 
+/**
+ * Enqueue video to be encoded.
+ * @param [in] mat The mat to be encoded.
+ * @return true iff enqueued.
+ */
 bool OmxCvImpl::process(const cv::Mat &mat) {
     cv::Mat ours = mat.clone();
 
@@ -316,49 +353,30 @@ bool OmxCvImpl::process(const cv::Mat &mat) {
     return true;
 }
 
-int main(int argc, char *argv[]) {
-    cv::VideoCapture capture(-1);
-    int width = 640, height = 480, framecount = 200;
+/**
+ * Constructor for our wrapper.
+ * @param [in] name The file to save to.
+ * @param [in] width The video width.
+ * @param [in] height The video height.
+ * @param [in] bitrate The bitrate, in Kbps.
+ * @param [in] fpsnum The FPS numerator.
+ * @param [in] fpsden The FPS denominator.
+ */
+OmxCv::OmxCv(const char *name, int width, int height, int bitrate, int fpsnum, int fpsden) {
+    m_impl = new OmxCvImpl(name, width, height, bitrate, fpsnum, fpsden);
+}
 
-    if (argc >= 3) {
-        width = atoi(argv[1]);
-        height = atoi(argv[2]);
-    }
+/**
+ * Wrapper destructor.
+ */
+OmxCv::~OmxCv() {
+    delete m_impl;
+}
 
-    if (argc >= 4) {
-        framecount = atoi(argv[3]);
-    }
-    
-    //Open the camera (testing only)
-    if (!capture.isOpened()) {
-        printf("Cannot open camera\n");
-        return 1;
-    }
-    //We can try to set these, but the camera may ignore this anyway...
-    capture.set(CV_CAP_PROP_FRAME_WIDTH, width);
-    capture.set(CV_CAP_PROP_FRAME_HEIGHT, height);
-    capture.set(CV_CAP_PROP_FPS, 30);
-    
-    OmxCvImpl e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
-    
-    auto totstart = steady_clock::now();
-    cv::Mat image;
-    for(int i = 0; i < framecount; i++) {
-        capture >> image;
-        //auto start = steady_clock::now();
-        e.process(image);
-        //printf("Processed frame %d (%d ms)\r", i+1, (int)TIMEDIFF(start));
-        //fflush(stdout);
-    }
-
-    //FILE *fp = fopen("Orig.rgb", "wb");
-    //fwrite(image.data, 3 * image.cols * image.rows, 1, fp);
-    //fclose(fp);
-    //picopter::DisplayShit(image.cols, image.rows, image.data);
-
-    printf("Average FPS: %.2f\n", (framecount * 1000) / (float)TIMEDIFF(totstart));
-    printf("DEPTH: %d, WIDTH: %d, HEIGHT: %d, IW: %d\n", image.depth(), image.cols, image.rows, static_cast<int>(image.step));
-    sleep_for(milliseconds(300));
-    
-    //bcm_host_deinit();
+/**
+ * Encode image.
+ * @param [in] in Image to be encoded.
+ */
+void OmxCv::Encode(const cv::Mat &in) {
+    m_impl->process(in);
 }

@@ -29,8 +29,6 @@ extern "C" {
 #include <ilclient.h>
 }
 
-
-
 //Determine what frame allocation routine to use
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(55,28,1)
     #define OMXCV_AV_FRAME_ALLOC av_frame_alloc

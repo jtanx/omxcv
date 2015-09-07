@@ -6,7 +6,7 @@ project (omxcv)
 include (FindPkgConfig)
 
 #Required libraries
-find_package (OpenCV REQUIRED)
+find_package (OpenCV 2.4 REQUIRED)
 include_directories (${OpenCV_INCLUDE_DIR})
 find_package (Threads REQUIRED) # For pthreads
 
@@ -47,10 +47,13 @@ set (SOURCE
     omxcv.cpp
 )
 
-add_executable (omxcv ${HEADERS} ${SOURCE})
+add_library (omxcv ${HEADERS} ${SOURCE})
+add_executable (omxcv-test omxcv-test.cpp)
 
-target_link_libraries (omxcv EGL GLESv2)
-target_link_libraries (omxcv ${LIBAVFORMAT_LIBRARIES} ${LIBAVCODEC_LIBRARIES} ${LIBAVUTIL_LIBRARIES} ${OpenCV_LIBS})
-target_link_libraries (omxcv bcm_host openmaxil bcm_host vcos vchiq_arm ilclient)
-target_link_libraries (omxcv ${CMAKE_THREAD_LIBS_INIT})
-target_link_libraries (omxcv ${LIBTCMALLOC_LIBRARIES} -lprofiler)
+target_link_libraries (omxcv LINK_PRIVATE EGL GLESv2)
+target_link_libraries (omxcv LINK_PRIVATE ${LIBAVFORMAT_LIBRARIES} ${LIBAVCODEC_LIBRARIES} ${LIBAVUTIL_LIBRARIES} ${OpenCV_LIBS})
+target_link_libraries (omxcv LINK_PRIVATE bcm_host openmaxil bcm_host vcos vchiq_arm ilclient)
+target_link_libraries (omxcv LINK_PRIVATE ${CMAKE_THREAD_LIBS_INIT})
+#target_link_libraries (omxcv LINK_PRIVATE ${LIBTCMALLOC_LIBRARIES} -lprofiler)
+
+target_link_libraries (omxcv-test LINK_PUBLIC omxcv)
