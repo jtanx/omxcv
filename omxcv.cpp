@@ -31,7 +31,7 @@ using std::chrono::duration_cast;
  * @return true iff initialised.
  */
 bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden) {
-    int ret;
+    //int ret;
 
     av_register_all();
     AVOutputFormat *fmt = av_guess_format(NULL, filename, NULL);
@@ -175,8 +175,14 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     //Initialise the scaler and output file
     lav_init(name, m_width, m_height, bitrate, fpsnum, fpsden);
 
+    const char *pt = strrchr(name, '/');
+    std::string n(name);
+    if (pt) {
+        n = n.substr(0, pt-name);
+    }
+    n += "/timecodes.txt";
     m_frame_count = 0;
-    m_timecodes = fopen("timecodes.txt", "w");
+    m_timecodes = fopen(n.c_str(), "w");
     fprintf(m_timecodes, "# timecode format v2\n");
 
     //Start the worker thread for dumping the encoded data
