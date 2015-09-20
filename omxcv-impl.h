@@ -54,7 +54,9 @@ namespace omxcv {
             SwsContext *m_sws_ctx;
             uint8_t *m_sps, *m_pps;
             uint16_t m_sps_length, m_pps_length;
+            bool m_initted_header;
             
+            std::string m_filename;
             std::condition_variable m_input_signaller;
             std::deque<std::pair<cv::Mat, int64_t>> m_input_queue;
             std::thread m_input_worker;

@@ -32,6 +32,8 @@ using std::chrono::duration_cast;
  */
 bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden) {
     av_register_all();
+    av_log_set_level(AV_LOG_INFO);
+    
     AVOutputFormat *fmt = av_guess_format(NULL, filename, NULL);
     if (fmt == NULL) {
         return false;
@@ -67,9 +69,6 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     m_video_stream->time_base.num = 1;
     m_video_stream->time_base.den = 1000;
     
-    //m_video_stream->r_frame_rate.num = fpsnum;
-    //m_video_stream->r_frame_rate.den = fpsden;
-    
     m_video_stream->start_time = AV_NOPTS_VALUE;
 
     m_video_stream->codec->sample_aspect_ratio.num = m_video_stream->sample_aspect_ratio.num;
@@ -82,12 +81,8 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     }
 
     if (m_mux_ctx->oformat->flags & AVFMT_GLOBALHEADER) {
-        m_mux_ctx->streams[0]->codec->flags |= CODEC_FLAG_GLOBAL_HEADER;
+        m_video_stream->codec->flags |= CODEC_FLAG_GLOBAL_HEADER;
     }
-
-    avformat_write_header(m_mux_ctx, NULL);
-    //Print info about this format
-    av_dump_format(m_mux_ctx, 0, filename, 1);
 
     return true;
 }
@@ -102,14 +97,16 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
  * @param [in] fpsden The FPS denominator.
  */
 OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int fpsnum, int fpsden)
-: m_stop{false}
-, m_width(width)
+: m_width(width)
 , m_height(height)
 , m_stride(((width + 31) & ~31) * 3)
 , m_sps(nullptr)
 , m_pps(nullptr)
 , m_sps_length(0)
 , m_pps_length(0)
+, m_initted_header(false)
+, m_filename(name)
+, m_stop{false}
 {
     bcm_host_init();
     OMX_Init();
@@ -180,8 +177,11 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     std::string n(name);
     if (pt) {
         n = n.substr(0, pt-name);
+        n += "/timecodes.txt";
+    } else {
+        n = "timecodes.txt";
     }
-    n += "/timecodes.txt";
+    
     m_frame_count = 0;
     m_timecodes = fopen(n.c_str(), "w");
     fprintf(m_timecodes, "# timecode format v2\n");
@@ -198,6 +198,10 @@ OmxCvImpl::~OmxCvImpl() {
     m_stop = true;
     m_input_signaller.notify_one();
     m_input_worker.join();
+    
+    //Free the SPS and PPS headers.
+    free(m_sps);
+    free(m_pps);
 
     //Teardown similar to hello_encode
     ilclient_change_component_state(m_encoder_component, OMX_StateIdle);
@@ -287,43 +291,53 @@ void OmxCvImpl::input_worker() {
 }
 
 /**
- * Dumps the CodecPrivate data for the Matroska container. Note this is the
- * same format as required for MP4 containers - in other words, the
- * AVCDecoderConfigurationRecord structure. Some values have been hard-coded
- * for simplicity's sake (Plus I don't know enough of the spec to find out
- * where else this info is stored).
+ * Dumps the CodecPrivate data for the Matroska container. 
+ * Note this is the same format as required for MP4 containers - in other words,
+ * the AVCC format (AVCDecoderConfigurationRecord structure). Some values have
+ * been hard-coded for simplicity's sake.
  * @return true iff CodecPrivate (extradata) was updated.
  */
 bool OmxCvImpl::dump_codec_private() {
     //Example CodecPrivate: 01 64 00 1e ff e1 00 0e 27 64 00 1e ac 2b 40 50 1e d0 0f 12 26 a0 01 00 05 28 ee 02 5c b0
     //See also: http://lists.matroska.org/pipermail/matroska-devel/2012-April/004196.html
+    //And: http://stackoverflow.com/questions/24884827/possible-locations-for-sequence-picture-parameter-sets-for-h-264-stream
+    //Note: lengthSizeMinusOne is normally 3 (4 bytes to specify NALU length)
+    //But: Annex B NALU signature is either 3 or 4 bytes long.
+    //However: Luckily for us, the RPi OMX encoder appears to always return
+    //NALUs with 4 byte headers. So we're OK! If we get one with a 3 byte header
+    //then we have to increase the buffer size by 1 to accomodate the size.
     uint8_t adcr[] = {
         1, //configurationVersion
         m_sps[1], //AVCProfileIndication
         m_sps[2], //profile_compatibility
         m_sps[3], //AVCLevelIndication
-        0xfc | 3, //lengthSizeMinusOne; I pick up 3 by observing what MKVMerge writes out to CodecPrivate.
+        0xfc | 3, //lengthSizeMinusOne;
         0xe0 | 1 //numOfSequenceParameterSets; 0xe0 for reserved bits. We have one SPS.
     };
     
-    uint8_t pps_count = 1;
-    size_t cp_size = sizeof(adcr) + 
-        sizeof(uint16_t) + m_sps_length + 
-        sizeof(uint8_t) + sizeof(uint16_t) + m_pps_length;
-    
+    AVCodecContext *c = m_video_stream->codec;
     av_free(c->extradata);
-    c->extradata_size = cp_size;
-    c->extradata = av_malloc(c->extradata_size);
+    
+    c->extradata_size = sizeof(adcr) + 2 + m_sps_length + 1 + 2 + m_pps_length;
+    c->extradata = static_cast<uint8_t*>(av_malloc(c->extradata_size));
     if (c->extradata) {
         memcpy(c->extradata, &adcr, sizeof(adcr));
-        memcpy(c->extradata+sizeof(adcr), &m_sps_length, sizeof(uint16_t));
-        memcpy(c->extradata+sizeof(adcr)+sizeof(uint16_t), m_sps, m_sps_length);
-        memcpy(c->extradata+sizeof(adcr)+sizeof(uint16_t)+m_sps_length, &pps_count, sizeof(uint8_t));
-        memcpy(c->extradata+sizeof(adcr)+sizeof(uint16_t)+m_sps_length+sizeof(uint8_t), m_pps, m_pps_length);
+        c->extradata[sizeof(adcr)] = m_sps_length >> 8;
+        c->extradata[sizeof(adcr)+1] = m_sps_length & 0xFF;
+        memcpy(c->extradata+sizeof(adcr)+2, m_sps, m_sps_length);
+        c->extradata[sizeof(adcr)+2+m_sps_length] = 1; //PPS count
+        c->extradata[sizeof(adcr)+2+m_sps_length+1] = m_pps_length >> 8;
+        c->extradata[sizeof(adcr)+2+m_sps_length+2] = m_pps_length & 0xFF;
+        memcpy(c->extradata+sizeof(adcr)+2+m_sps_length+3, m_pps, m_pps_length);
     } else {
         perror("Extradata allocation failed");
         return false;
     }
+    
+    //Write the file header.
+    avformat_write_header(m_mux_ctx, NULL);
+    //Print info about this format
+    av_dump_format(m_mux_ctx, 0, m_filename.c_str(), 1);
     return true;
 }
 
@@ -346,39 +360,64 @@ bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
             //Check for an SPS/PPS header
             if (out->nFilledLen > 5 && !memcmp(out->pBuffer, header_sig, 4)) {
                 uint8_t naltype = out->pBuffer[4] & 0x1f;
-                if (naltype == 7) { //SPS
-                    free(m_sps);
-                    m_sps_length = out->nFilledLen - 4;
-                    m_sps = malloc(m_sps_length);
-                    //Strip the NAL header.
-                    memcpy(m_sps, out->pBuffer+4, m_sps_length);
-                    ret = false;
-                } else if (naltype == 8) {
-                    free(m_pps);
-                    m_pps_length = out->nFilledLen - 4;
-                    m_pps = malloc(m_pps_length);
-                    //Strip the NAL header.
-                    memcpy(m_pps, out->pBuffer+4, m_pps_length);
-                    ret = false;
-                }
-                
-                if (m_sps && m_pps) {
-                    dump_codec_private();
+                if (m_initted_header) {
+                    if (naltype == 7 || naltype == 8) {
+                        ret = false;
+                    }
+                } else {
+                    if (naltype == 7) { //SPS
+                        free(m_sps);
+                        m_sps_length = out->nFilledLen - 4;
+                        m_sps = static_cast<uint8_t*>(malloc(m_sps_length));
+                        //Strip the NAL header.
+                        memcpy(m_sps, out->pBuffer+4, m_sps_length);
+                        ret = false;
+                    } else if (naltype == 8) {
+                        free(m_pps);
+                        m_pps_length = out->nFilledLen - 4;
+                        m_pps = static_cast<uint8_t*>(malloc(m_pps_length));
+                        //Strip the NAL header.
+                        memcpy(m_pps, out->pBuffer+4, m_pps_length);
+                        ret = false;
+                    }
+                    
+                    if (m_sps && m_pps) {
+                        if (dump_codec_private()) {
+                            m_initted_header = true;
+                        }
+                    }
                 }
             }
             
-            if (ret) {
+            if (ret && out->nFilledLen > 3) {
                 av_init_packet(&pkt);
                 pkt.stream_index = m_video_stream->index;
-                pkt.data= out->pBuffer;
-                pkt.size= out->nFilledLen;
-
+                pkt.pts = timestamp;
+                
+                //AVCC format.
+                if (out->pBuffer[2] == 1) {
+                    //Slow fallback. But this never appears to happen.
+                    pkt.data = static_cast<uint8_t*>(malloc(out->nFilledLen+1));
+                    memcpy(pkt.data+1, out->pBuffer, out->nFilledLen);
+                } else {
+                    pkt.data = out->pBuffer;
+                }
+                
+                out->nFilledLen -= 4;
+                pkt.data[0] = (out->nFilledLen >> 24) & 0xFF;
+                pkt.data[1] = (out->nFilledLen >> 16) & 0xFF;
+                pkt.data[2] = (out->nFilledLen >> 8) & 0xFF;
+                pkt.data[3] = out->nFilledLen & 0xFF;
+                pkt.size = out->nFilledLen+4;
+                
                 if (out->nFlags & OMX_BUFFERFLAG_SYNCFRAME) {
                     pkt.flags |= AV_PKT_FLAG_KEY;
                 }
-
-                pkt.pts = timestamp;
+                
                 av_write_frame(m_mux_ctx, &pkt);
+                if (pkt.data != out->pBuffer) {
+                    free(pkt.data);
+                }
             }
             out->nFilledLen = 0;
         }
