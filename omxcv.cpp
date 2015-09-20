@@ -31,8 +31,6 @@ using std::chrono::duration_cast;
  * @return true iff initialised.
  */
 bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden) {
-    //int ret;
-
     av_register_all();
     AVOutputFormat *fmt = av_guess_format(NULL, filename, NULL);
     if (fmt == NULL) {
@@ -61,7 +59,7 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
     m_video_stream->codec->codec_type = AVMEDIA_TYPE_VIDEO;
     m_video_stream->codec->bit_rate = bitrate;
     m_video_stream->codec->profile = FF_PROFILE_H264_HIGH;
-    m_video_stream->codec->level = 41;
+    m_video_stream->codec->level = 30; //Level 3.0
     m_video_stream->codec->time_base.num = 1;
     m_video_stream->codec->time_base.den = 1000;
     m_video_stream->codec->pix_fmt = AV_PIX_FMT_YUV420P;
@@ -105,13 +103,16 @@ bool OmxCvImpl::lav_init(const char *filename, int width, int height, int bitrat
  */
 OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int fpsnum, int fpsden)
 : m_stop{false}
+, m_width(width)
+, m_height(height)
+, m_stride(((width + 31) & ~31) * 3)
+, m_sps(nullptr)
+, m_pps(nullptr)
+, m_sps_length(0)
+, m_pps_length(0)
 {
     bcm_host_init();
     OMX_Init();
-
-    m_width = width;
-    m_height = height;
-    m_stride = ((m_width + 31) & ~31) * 3;
 
     m_ilclient = ilclient_init();
     ilclient_create_component(m_ilclient, &m_encoder_component, (char*)"video_encode", 
@@ -286,6 +287,47 @@ void OmxCvImpl::input_worker() {
 }
 
 /**
+ * Dumps the CodecPrivate data for the Matroska container. Note this is the
+ * same format as required for MP4 containers - in other words, the
+ * AVCDecoderConfigurationRecord structure. Some values have been hard-coded
+ * for simplicity's sake (Plus I don't know enough of the spec to find out
+ * where else this info is stored).
+ * @return true iff CodecPrivate (extradata) was updated.
+ */
+bool OmxCvImpl::dump_codec_private() {
+    //Example CodecPrivate: 01 64 00 1e ff e1 00 0e 27 64 00 1e ac 2b 40 50 1e d0 0f 12 26 a0 01 00 05 28 ee 02 5c b0
+    //See also: http://lists.matroska.org/pipermail/matroska-devel/2012-April/004196.html
+    uint8_t adcr[] = {
+        1, //configurationVersion
+        m_sps[1], //AVCProfileIndication
+        m_sps[2], //profile_compatibility
+        m_sps[3], //AVCLevelIndication
+        0xfc | 3, //lengthSizeMinusOne; I pick up 3 by observing what MKVMerge writes out to CodecPrivate.
+        0xe0 | 1 //numOfSequenceParameterSets; 0xe0 for reserved bits. We have one SPS.
+    };
+    
+    uint8_t pps_count = 1;
+    size_t cp_size = sizeof(adcr) + 
+        sizeof(uint16_t) + m_sps_length + 
+        sizeof(uint8_t) + sizeof(uint16_t) + m_pps_length;
+    
+    av_free(c->extradata);
+    c->extradata_size = cp_size;
+    c->extradata = av_malloc(c->extradata_size);
+    if (c->extradata) {
+        memcpy(c->extradata, &adcr, sizeof(adcr));
+        memcpy(c->extradata+sizeof(adcr), &m_sps_length, sizeof(uint16_t));
+        memcpy(c->extradata+sizeof(adcr)+sizeof(uint16_t), m_sps, m_sps_length);
+        memcpy(c->extradata+sizeof(adcr)+sizeof(uint16_t)+m_sps_length, &pps_count, sizeof(uint8_t));
+        memcpy(c->extradata+sizeof(adcr)+sizeof(uint16_t)+m_sps_length+sizeof(uint8_t), m_pps, m_pps_length);
+    } else {
+        perror("Extradata allocation failed");
+        return false;
+    }
+    return true;
+}
+
+/**
  * Output muxing routine.
  * @param [in] out Buffer to be saved.
  * @param [in] timestamp Timestamp of this buffer.
@@ -296,41 +338,48 @@ bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
 
     if (out != NULL) {
         static const uint8_t header_sig[] = {0,0,0,1};
-        static int64_t last_pts = 0;
 
         if (out->nFilledLen > 0) {
-            static int pkt_offset = 0;
             AVPacket pkt;
             ret = true;
 
             //Check for an SPS/PPS header
             if (out->nFilledLen > 5 && !memcmp(out->pBuffer, header_sig, 4)) {
                 uint8_t naltype = out->pBuffer[4] & 0x1f;
-                if (naltype == 7 || naltype == 8) {
+                if (naltype == 7) { //SPS
+                    free(m_sps);
+                    m_sps_length = out->nFilledLen - 4;
+                    m_sps = malloc(m_sps_length);
+                    //Strip the NAL header.
+                    memcpy(m_sps, out->pBuffer+4, m_sps_length);
+                    ret = false;
+                } else if (naltype == 8) {
+                    free(m_pps);
+                    m_pps_length = out->nFilledLen - 4;
+                    m_pps = malloc(m_pps_length);
+                    //Strip the NAL header.
+                    memcpy(m_pps, out->pBuffer+4, m_pps_length);
                     ret = false;
                 }
+                
+                if (m_sps && m_pps) {
+                    dump_codec_private();
+                }
             }
+            
+            if (ret) {
+                av_init_packet(&pkt);
+                pkt.stream_index = m_video_stream->index;
+                pkt.data= out->pBuffer;
+                pkt.size= out->nFilledLen;
 
-            av_init_packet(&pkt);
-            pkt.stream_index = m_video_stream->index;
-            pkt.data= out->pBuffer;
-            pkt.size= out->nFilledLen;
+                if (out->nFlags & OMX_BUFFERFLAG_SYNCFRAME) {
+                    pkt.flags |= AV_PKT_FLAG_KEY;
+                }
 
-            if (out->nFlags & OMX_BUFFERFLAG_SYNCFRAME) {
-                pkt.flags |= AV_PKT_FLAG_KEY;
+                pkt.pts = timestamp;
+                av_write_frame(m_mux_ctx, &pkt);
             }
-
-            pkt.pts = timestamp + pkt_offset;
-            if (!ret) { //Increment the offset if this is not a 'frame'
-                pkt_offset++;
-            } else if (pkt.pts == last_pts) {
-                printf("SHIT\n");
-                pkt.pts++;
-                pkt_offset++;
-            }
-
-            last_pts = pkt.pts;
-            av_write_frame(m_mux_ctx, &pkt);
             out->nFilledLen = 0;
         }
     }

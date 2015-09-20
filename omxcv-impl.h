@@ -52,7 +52,9 @@ namespace omxcv {
             int m_width, m_height, m_stride, m_fpsnum, m_fpsden;
             AVFrame *m_omx_in;
             SwsContext *m_sws_ctx;
-
+            uint8_t *m_sps, *m_pps;
+            uint16_t m_sps_length, m_pps_length;
+            
             std::condition_variable m_input_signaller;
             std::deque<std::pair<cv::Mat, int64_t>> m_input_queue;
             std::thread m_input_worker;
@@ -72,6 +74,7 @@ namespace omxcv {
             int m_frame_count;
 
             void input_worker();
+            bool dump_codec_private();
             bool write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp);
             bool lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden);
     };
