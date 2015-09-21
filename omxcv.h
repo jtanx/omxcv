@@ -3,6 +3,9 @@
  * @brief Header file for the library
  */
 
+#ifndef __OMXCV_H
+#define __OMXCV_H
+
 #include <opencv2/opencv.hpp>
 
 namespace omxcv {
@@ -21,3 +24,5 @@ namespace omxcv {
             OmxCvImpl *m_impl;
     };
 }
+
+#endif /* _OMXCV_H */

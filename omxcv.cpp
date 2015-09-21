@@ -3,6 +3,7 @@
  * @brief Routines to perform hardware accelerated H.264 encoding on the RPi.
  */
 
+#include "omxcv-config.h"
 #include "omxcv.h"
 #include "omxcv-impl.h"
 using namespace omxcv;
@@ -28,6 +29,7 @@ using std::chrono::duration_cast;
 bool OmxCvImpl::lav_init() {
     av_register_all();
     av_log_set_level(AV_LOG_INFO);
+    char buf[BUFSIZ];
 
     AVOutputFormat *fmt = av_guess_format(NULL, m_filename.c_str(), NULL);
     if (fmt == NULL) {
@@ -50,6 +52,11 @@ bool OmxCvImpl::lav_init() {
         return false;
     }
 
+    snprintf(buf, sizeof(buf), "Created at %sBitrate: %d Kbps",
+        ctime((time_t*)&m_mux_ctx->start_time_realtime), m_bitrate);
+
+    av_dict_set(&m_video_stream->metadata, "encoder", "omxcv " OMXCV_VERSION " " OMXCV_DATE, 0);
+    av_dict_set(&m_video_stream->metadata, "settings", buf, 0);
     m_video_stream->codec->width = m_width;
     m_video_stream->codec->height = m_height;
     m_video_stream->codec->codec_id = AV_CODEC_ID_H264;

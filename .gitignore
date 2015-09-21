@@ -33,3 +33,9 @@ cmake_install.cmake
 Makefile
 
 omxcv
+omxcv-test
+omxcv-config.h
+save.mkv
+save.mp4
+timecodes.txt
+

@@ -1,0 +1,12 @@
+/**
+ * @file config.h
+ * @brief Compile-time configuration options.
+ */
+
+#ifndef __OMXCV_CONFIG_H
+#define __OMXCV_CONFIG_H
+
+#define OMXCV_VERSION "${OMXCV_VERSION}"
+#define OMXCV_DATE "${OMXCV_DATE}"
+
+#endif /* __OMXCV_CONFIG_H */

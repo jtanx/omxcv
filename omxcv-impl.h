@@ -81,4 +81,4 @@ namespace omxcv {
     };
 }
 
-#endif
+#endif // __OMXCV_IMPL_H

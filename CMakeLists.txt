@@ -5,6 +5,16 @@ project (omxcv)
 
 include (FindPkgConfig)
 
+#Versioning
+execute_process (COMMAND git rev-parse --short HEAD
+				 OUTPUT_STRIP_TRAILING_WHITESPACE
+				 OUTPUT_VARIABLE OMXCV_VERSION
+)
+execute_process (COMMAND git  show -s --format=%ci HEAD
+				 OUTPUT_STRIP_TRAILING_WHITESPACE
+				 OUTPUT_VARIABLE OMXCV_DATE
+)
+
 #Required libraries
 find_package (OpenCV 2.4 REQUIRED)
 include_directories (${OpenCV_INCLUDE_DIR})
@@ -37,6 +47,7 @@ endif (CMAKE_COMPILER_IS_GNUCXX)
 
 #Source files
 set (HEADERS
+    omxcv-config.h
     omxcv.h
     image_gpu.h
 )
@@ -46,9 +57,11 @@ set (SOURCE
     omxcv.cpp
 )
 
-add_library (omxcv ${HEADERS} ${SOURCE})
-add_executable (omxcv-test omxcv-test.cpp)
+#Generate config header
+configure_file (omxcv-config.h.in omxcv-config.h)
 
+#Library creation
+add_library (omxcv ${HEADERS} ${SOURCE})
 target_link_libraries (omxcv LINK_PRIVATE EGL GLESv2)
 target_link_libraries (omxcv LINK_PRIVATE ${LIBAVFORMAT_LIBRARIES} ${LIBAVCODEC_LIBRARIES} ${LIBAVUTIL_LIBRARIES} ${OpenCV_LIBS})
 target_link_libraries (omxcv LINK_PRIVATE bcm_host openmaxil bcm_host vcos vchiq_arm ilclient)
@@ -62,6 +75,6 @@ if (HAVE_LIBPROFILER)
 	target_link_libraries (omxcv LINK_PUBLIC profiler)
 endif (HAVE_LIBPROFILER)
 
-#target_link_libraries (omxcv LINK_PRIVATE ${LIBTCMALLOC_LIBRARIES} -lprofiler)
-
+#Test executable
+add_executable (omxcv-test omxcv-test.cpp)
 target_link_libraries (omxcv-test LINK_PUBLIC omxcv)
