@@ -22,9 +22,8 @@ include_directories (${LIBAVUTIL_INCLUDE_DIRS})
 link_directories (${LIBAVUTIL_LIBRARY_DIRS})
 
 #Optional libraries
-pkg_check_modules (LIBTCMALLOC libtcmalloc)
-include_directories (${LIBTCMALLOC_INCLUDE_DIRS}})
-link_directories (${LIBTCMALLOC_LIBRARY_DIRS})
+CHECK_LIBRARY_EXISTS(tcmalloc malloc "" HAVE_LIBTCMALLOC)
+CHECK_LIBRARY_EXISTS(profiler malloc "" HAVE_LIBPROFILER)
 
 #Raspberry Pi specific includes.
 #Requires the installation of the userland package.
@@ -54,6 +53,15 @@ target_link_libraries (omxcv LINK_PRIVATE EGL GLESv2)
 target_link_libraries (omxcv LINK_PRIVATE ${LIBAVFORMAT_LIBRARIES} ${LIBAVCODEC_LIBRARIES} ${LIBAVUTIL_LIBRARIES} ${OpenCV_LIBS})
 target_link_libraries (omxcv LINK_PRIVATE bcm_host openmaxil bcm_host vcos vchiq_arm ilclient)
 target_link_libraries (omxcv LINK_PRIVATE ${CMAKE_THREAD_LIBS_INIT})
+
+if (HAVE_LIBTCMALLOC)
+	target_link_libraries (omxcv LINK_PUBLIC tcmalloc)
+endif (HAVE_LIBTCMALLOC)
+
+if (HAVE_LIBPROFILER)
+	target_link_libraries (omxcv LINK_PUBLIC profiler)
+endif (HAVE_LIBPROFILER)
+
 #target_link_libraries (omxcv LINK_PRIVATE ${LIBTCMALLOC_LIBRARIES} -lprofiler)
 
 target_link_libraries (omxcv-test LINK_PUBLIC omxcv)

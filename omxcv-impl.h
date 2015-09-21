@@ -19,7 +19,6 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#include <libswscale/swscale.h>
 #include <libavutil/opt.h>
 #include <libavutil/avutil.h>
 #include <libavutil/mathematics.h>
@@ -42,43 +41,43 @@ extern "C" {
 #define OMX_ENCODE_PORT_OUT 201
 
 namespace omxcv {
+    /**
+     * Our implementation class of the encoder.
+     */
     class OmxCvImpl {
         public:
             OmxCvImpl(const char *name, int width, int height, int bitrate, int fpsnum=-1, int fpsden=-1);
             virtual ~OmxCvImpl();
-            
+
             bool process(const cv::Mat &mat);
         private:
-            int m_width, m_height, m_stride, m_fpsnum, m_fpsden;
-            AVFrame *m_omx_in;
-            SwsContext *m_sws_ctx;
+            int m_width, m_height, m_stride, m_bitrate, m_fpsnum, m_fpsden;
             uint8_t *m_sps, *m_pps;
             uint16_t m_sps_length, m_pps_length;
             bool m_initted_header;
-            
+
             std::string m_filename;
             std::condition_variable m_input_signaller;
             std::deque<std::pair<cv::Mat, int64_t>> m_input_queue;
             std::thread m_input_worker;
             std::mutex  m_input_mutex;
             std::atomic<bool> m_stop;
-            
+
             /** The OpenMAX IL client **/
             ILCLIENT_T *m_ilclient;
             COMPONENT_T *m_encoder_component;
 
-            /** Writine out stuff **/
+            /** Writing out stuff **/
             AVFormatContext *m_mux_ctx;
             AVStream *m_video_stream;
 
-            FILE *m_timecodes;
             std::chrono::steady_clock::time_point m_frame_start;
             int m_frame_count;
 
-            void input_worker();
+            bool lav_init();
             bool dump_codec_private();
+            void input_worker();
             bool write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp);
-            bool lav_init(const char *filename, int width, int height, int bitrate, int fpsnum, int fpsden);
     };
 }
 

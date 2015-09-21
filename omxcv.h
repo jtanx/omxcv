@@ -8,7 +8,10 @@
 namespace omxcv {
     /* Forward declaration of our implementation. */
     class OmxCvImpl;
-    
+
+    /**
+     * Real-time OpenMAX H.264 encoder for the Raspberry Pi/OpenCV.
+     */
     class OmxCv {
         public:
             OmxCv(const char *name, int width, int height, int bitrate=3000, int fpsnum=25, int fpsden=1);

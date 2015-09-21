@@ -18,8 +18,7 @@ using std::chrono::milliseconds;
 using std::chrono::steady_clock;
 using std::chrono::duration_cast;
 
-int 
-main(int argc, char *argv[]) {
+int main(int argc, char *argv[]) {
     cv::VideoCapture capture(-1);
 
     int width = 640, height = 480, framecount = 200;
@@ -32,7 +31,7 @@ main(int argc, char *argv[]) {
     if (argc >= 4) {
         framecount = atoi(argv[3]);
     }
-    
+
     //Open the camera (testing only)
     if (!capture.isOpened()) {
         printf("Cannot open camera\n");
@@ -42,9 +41,9 @@ main(int argc, char *argv[]) {
     capture.set(CV_CAP_PROP_FRAME_WIDTH, width);
     capture.set(CV_CAP_PROP_FRAME_HEIGHT, height);
     capture.set(CV_CAP_PROP_FPS, 30);
-    
+
     OmxCv e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
-    
+
     auto totstart = steady_clock::now();
     cv::Mat image;
     for(int i = 0; i < framecount; i++) {
@@ -63,6 +62,6 @@ main(int argc, char *argv[]) {
     printf("Average FPS: %.2f\n", (framecount * 1000) / (float)TIMEDIFF(totstart));
     printf("DEPTH: %d, WIDTH: %d, HEIGHT: %d, IW: %d\n", image.depth(), image.cols, image.rows, static_cast<int>(image.step));
     sleep_for(milliseconds(300));
-    
+
     //bcm_host_deinit();
 }
