@@ -28,6 +28,9 @@ extern "C" {
 #include <ilclient.h>
 }
 
+//For OMX_IndexParamNalStreamFormatSelect
+#include <OMX_Broadcom.h>
+
 //Determine what frame allocation routine to use
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(55,28,1)
     #define OMXCV_AV_FRAME_ALLOC av_frame_alloc
@@ -39,6 +42,9 @@ extern "C" {
 
 #define OMX_ENCODE_PORT_IN  200
 #define OMX_ENCODE_PORT_OUT 201
+
+//The maximum size of a NALU. We'll just assume 512 KB.
+#define MAX_NALU_SIZE (512*1024)
 
 namespace omxcv {
     /**
@@ -54,6 +60,8 @@ namespace omxcv {
             int m_width, m_height, m_stride, m_bitrate, m_fpsnum, m_fpsden;
             uint8_t *m_sps, *m_pps;
             uint16_t m_sps_length, m_pps_length;
+            uint32_t m_nalu_filled, m_nalu_required;
+            uint8_t *m_nalu_buffer;
             bool m_initted_header;
 
             std::string m_filename;

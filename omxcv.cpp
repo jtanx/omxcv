@@ -16,8 +16,6 @@ using std::chrono::duration_cast;
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
-#include <chrono>
-#include <thread>
 
 #define TIMEDIFF(start) (duration_cast<milliseconds>(steady_clock::now() - start).count())
 #define CHECKED(c, v) if ((c)) throw std::invalid_argument(v)
@@ -160,6 +158,8 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
 , m_pps(nullptr)
 , m_sps_length(0)
 , m_pps_length(0)
+, m_nalu_filled(0)
+, m_nalu_required(0)
 , m_initted_header(false)
 , m_filename(name)
 , m_stop{false}
@@ -232,6 +232,25 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
             OMX_IndexParamVideoBitrate, &bitrate_type);
     CHECKED(ret != OMX_ErrorNone, "OMX_SetParameter failed for setting encoder bitrate.");
 
+    //We want at most one NAL per output buffer that we receive.
+    OMX_CONFIG_BOOLEANTYPE nal = {0};
+    nal.nSize = sizeof(OMX_CONFIG_BOOLEANTYPE);
+    nal.nVersion.nVersion = OMX_VERSION;
+    nal.bEnabled = OMX_TRUE;
+    ret = OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
+        OMX_IndexParamBrcmNALSSeparate, &nal);
+    CHECKED(ret != 0, "OMX_SetParameter failed for setting separate NALUs");
+
+    //We want the encoder to write the NALU length instead start codes.
+    OMX_NALSTREAMFORMATTYPE nal2 = {0};
+    nal2.nSize = sizeof(OMX_NALSTREAMFORMATTYPE);
+    nal2.nVersion.nVersion = OMX_VERSION;
+    nal2.nPortIndex = OMX_ENCODE_PORT_OUT;
+    nal2.eNaluFormat = OMX_NaluFormatFourByteInterleaveLength;
+    ret = OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
+        (OMX_INDEXTYPE)OMX_IndexParamNalStreamFormatSelect, &nal2);
+    CHECKED(ret != 0, "OMX_SetParameter failed for setting NALU format.");
+
     ret = ilclient_change_component_state(m_encoder_component, OMX_StateIdle);
     CHECKED(ret != 0, "ILClient failed to change encoder to idle state.");
     ret = ilclient_enable_port_buffers(m_encoder_component, OMX_ENCODE_PORT_IN, NULL, NULL, NULL);
@@ -240,6 +259,9 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     CHECKED(ret != 0, "ILClient failed to enable output buffers.");
     ret = ilclient_change_component_state(m_encoder_component, OMX_StateExecuting);
     CHECKED(ret != 0, "ILClient failed to change encoder to executing stage.");
+
+    //Initialise NALU buffer
+    m_nalu_buffer = new uint8_t[MAX_NALU_SIZE];
 
     //Start the worker thread for dumping the encoded data
     m_input_worker = std::thread(&OmxCvImpl::input_worker, this);
@@ -257,6 +279,8 @@ OmxCvImpl::~OmxCvImpl() {
     //Free the SPS and PPS headers.
     delete [] m_sps;
     delete [] m_pps;
+    //Free the NALU buffer.
+    delete [] m_nalu_buffer;
 
     //Teardown similar to hello_encode
     ilclient_change_component_state(m_encoder_component, OMX_StateIdle);
@@ -284,6 +308,8 @@ void OmxCvImpl::input_worker() {
     std::unique_lock<std::mutex> lock(m_input_mutex);
     OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
     OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 1);
+    assert(in != NULL);
+    assert(out != NULL);
 
     //FILE *fp = fopen("test.yuv", "wb");
     while (true) {
@@ -317,6 +343,7 @@ void OmxCvImpl::input_worker() {
             OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
             //printf("Encoding time (ms): %d [%d]\r", (int)TIMEDIFF(conv_start), ++framecounter);
             do {
+                out->nFilledLen = 0; //I don't think this is necessary, but whatever.
                 OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
                 out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 1);
             } while (!write_data(out, frame.second));
@@ -329,6 +356,7 @@ void OmxCvImpl::input_worker() {
 
     //fclose(fp);
     in->nFilledLen = 0;
+    in->nFlags |= OMX_BUFFERFLAG_EOS;
     OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
     OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
 }
@@ -340,80 +368,83 @@ void OmxCvImpl::input_worker() {
  * @return true if buffer was saved.
  */
 bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
-    bool ret = false;
+    bool ret = true;
+    uint8_t *buffer = out->pBuffer;
 
-    if (out != NULL) {
-        if (out->nFilledLen > 4) {
-            AVPacket pkt;
-            ret = true;
+    //Do we already have a partial NALU?
+    if (m_nalu_required > 0) {
+        assert((out->nFilledLen+m_nalu_filled) <= m_nalu_required);
+        memcpy(m_nalu_buffer+m_nalu_filled, out->pBuffer, out->nFilledLen);
+        m_nalu_filled += out->nFilledLen;
 
-            //Check for an SPS/PPS header
-            //Signature is either 00 00 00 01 or 00 00 01; we need the former.
-            if (out->nFilledLen > 5 && out->pBuffer[2] == 0) {
-                uint8_t naltype = out->pBuffer[4] & 0x1f;
-                if (m_initted_header) {
-                    if (naltype == 7 || naltype == 8) {
-                        ret = false;
-                    }
-                } else {
-                    if (naltype == 7) { //SPS
-                        delete [] m_sps;
-                        m_sps_length = out->nFilledLen - 4;
-                        m_sps = new uint8_t[m_sps_length];
-                        //Strip the NAL header.
-                        memcpy(m_sps, out->pBuffer+4, m_sps_length);
-                        ret = false;
-                    } else if (naltype == 8) {
-                        delete [] m_pps;
-                        m_pps_length = out->nFilledLen - 4;
-                        m_pps = new uint8_t[m_pps_length];
-                        //Strip the NAL header.
-                        memcpy(m_pps, out->pBuffer+4, m_pps_length);
-                        ret = false;
-                    }
-
-                    if (m_sps && m_pps) {
-                        if (dump_codec_private()) {
-                            m_initted_header = true;
-                        }
-                    }
-                }
-            }
-
-            if (ret) {
-                av_init_packet(&pkt);
-                pkt.stream_index = m_video_stream->index;
-                pkt.pts = timestamp;
-
-                //AVCC format.
-                if (out->pBuffer[2] == 1) {
-                    //Slow fallback. But this never appears to happen.
-                    out->nFilledLen++;
-                    pkt.data = static_cast<uint8_t*>(malloc(out->nFilledLen));
-                    memcpy(pkt.data+1, out->pBuffer, out->nFilledLen-1);
-                } else {
-                    pkt.data = out->pBuffer;
-                }
-
-                pkt.size = out->nFilledLen;
-                out->nFilledLen -= 4;
-                pkt.data[0] = (out->nFilledLen >> 24) & 0xFF;
-                pkt.data[1] = (out->nFilledLen >> 16) & 0xFF;
-                pkt.data[2] = (out->nFilledLen >> 8) & 0xFF;
-                pkt.data[3] = out->nFilledLen & 0xFF;
-
-                //Check for IDR frames (keyframes)
-                if ((pkt.data[4] & 0x1f) == 5) {
-                    pkt.flags |= AV_PKT_FLAG_KEY;
-                }
-
-                av_write_frame(m_mux_ctx, &pkt);
-                if (pkt.data != out->pBuffer) {
-                    free(pkt.data);
-                }
-            }
-            out->nFilledLen = 0;
+        //Have we got a complete NALU now?
+        if (m_nalu_filled == m_nalu_required) {
+            printf("Fulfilled NALU of size %d.\n", m_nalu_filled);
+            buffer = m_nalu_buffer;
+            out->nFilledLen = m_nalu_filled;
+            m_nalu_filled = m_nalu_required = 0;
+        } else {
+            return false;
         }
+    }
+
+    //Check for an SPS/PPS header
+    //First 4 bytes are NALU length (Big endian)
+    assert(out->nFilledLen > 4);
+    uint32_t nallength = (buffer[0] << 24) | (buffer[1] << 16) |
+        (buffer[2] << 8) | (buffer[3]);
+    if (nallength != out->nFilledLen-4) {
+        printf("Indicated NAL length of %d is different to filled buffer size (%d)!\n", nallength, out->nFilledLen);
+        assert(nallength > (out->nFilledLen-4) && nallength <= MAX_NALU_SIZE);
+
+        m_nalu_required = nallength+4; //Size of NALU+4 bytes for length
+        m_nalu_filled = out->nFilledLen; //How much we've got so far
+        memcpy(m_nalu_buffer, out->pBuffer, out->nFilledLen);
+        return false;
+    }
+
+    uint8_t naltype = buffer[4] & 0x1f;
+    if (m_initted_header) {
+        if (naltype == 7 || naltype == 8) {
+            return false;
+        }
+    } else {
+        if (naltype == 7) { //SPS
+            m_sps_length = out->nFilledLen - 4;
+            m_sps = new uint8_t[m_sps_length];
+            //Strip the NAL header.
+            memcpy(m_sps, buffer+4, m_sps_length);
+            ret = false;
+        } else if (naltype == 8) {
+            m_pps_length = out->nFilledLen - 4;
+            m_pps = new uint8_t[m_pps_length];
+            //Strip the NAL header.
+            memcpy(m_pps, buffer+4, m_pps_length);
+            ret = false;
+        }
+
+        if (m_sps && m_pps) {
+            if (dump_codec_private()) {
+                m_initted_header = true;
+            }
+        }
+    }
+
+    if (ret) { //We only reach here if we have a full NALU to write out.
+        AVPacket pkt;
+        av_init_packet(&pkt);
+
+        pkt.stream_index = m_video_stream->index;
+        pkt.pts = timestamp;
+        pkt.data = buffer;
+        pkt.size = out->nFilledLen;
+
+        //Check for IDR frames (keyframes)
+        if ((pkt.data[4] & 0x1f) == 5) {
+            pkt.flags |= AV_PKT_FLAG_KEY;
+        }
+
+        av_write_frame(m_mux_ctx, &pkt);
     }
     return ret;
 }

@@ -37,7 +37,9 @@ CHECK_LIBRARY_EXISTS(profiler malloc "" HAVE_LIBPROFILER)
 
 #Raspberry Pi specific includes.
 #Requires the installation of the userland package.
-include_directories (/opt/vc/include /opt/vc/src/hello_pi/libs/ilclient /opt/vc/include/interface/vcos/pthreads /opt/vc/include/interface/vmcs_host/linux)
+include_directories (/opt/vc/include /opt/vc/src/hello_pi/libs/ilclient)
+include_directories (/opt/vc/include/interface/vcos/pthreads)
+include_directories (/opt/vc/include/IL /opt/vc/include/interface/vmcs_host/linux)
 link_directories (/opt/vc/lib /opt/vc/src/hello_pi/libs/ilclient)
 
 #Compile options
