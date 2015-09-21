@@ -45,6 +45,9 @@ link_directories (/opt/vc/lib /opt/vc/src/hello_pi/libs/ilclient)
 #Compile options
 if (CMAKE_COMPILER_IS_GNUCXX)
 	set (CMAKE_CXX_FLAGS "-Wall -Wno-variadic-macros -std=c++11 -pedantic -gdwarf-3")
+	if (ENABLE_PI2_CONFIGS)
+		set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -mcpu=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard")
+	endif (ENABLE_PI2_CONFIGS)
 endif (CMAKE_COMPILER_IS_GNUCXX)
 
 #Source files
