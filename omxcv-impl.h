@@ -66,7 +66,7 @@ namespace omxcv {
 
             std::string m_filename;
             std::condition_variable m_input_signaller;
-            std::deque<std::pair<cv::Mat, int64_t>> m_input_queue;
+            std::deque<std::pair<OMX_BUFFERHEADERTYPE *, int64_t>> m_input_queue;
             std::thread m_input_worker;
             std::mutex  m_input_mutex;
             std::atomic<bool> m_stop;

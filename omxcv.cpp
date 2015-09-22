@@ -21,7 +21,7 @@ using std::chrono::duration_cast;
 #define CHECKED(c, v) if ((c)) throw std::invalid_argument(v)
 
 #ifdef ENABLE_NEON
-extern "C" void omxcv_bgr2rgb_neon(unsigned char *src, unsigned char *dst, int n);
+extern "C" void omxcv_bgr2rgb_neon(const unsigned char *src, unsigned char *dst, int n);
 #endif
 
 /**
@@ -30,11 +30,11 @@ extern "C" void omxcv_bgr2rgb_neon(unsigned char *src, unsigned char *dst, int n
  * @param [in] dst The destination buffer.
  * @param [in] stride The stride of the image.
  */
-void BGR2RGB(cv::Mat &src, uint8_t *dst, int stride) {
+void BGR2RGB(const cv::Mat &src, uint8_t *dst, int stride) {
 #ifdef ENABLE_NEON
     int runs = src.cols/8;
     for (int i = 0; i < src.rows; i++) {
-        uint8_t *buffer = src.ptr<uint8_t>(i);
+        const uint8_t *buffer = src.ptr<const uint8_t>(i);
         omxcv_bgr2rgb_neon(buffer, dst+stride*i, runs);
     }
 #else
@@ -228,6 +228,8 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     def.format.video.eColorFormat =  OMX_COLOR_Format24bitBGR888; //OMX_COLOR_Format32bitABGR8888;//OMX_COLOR_FormatYUV420PackedPlanar;
     //Must be manually defined to ensure sufficient size if stride needs to be rounded up to multiple of 32.
     def.nBufferSize = def.format.video.nStride * def.format.video.nSliceHeight;
+    //We allocate 6 input buffers.
+    def.nBufferCountActual = 6;
 
     ret = OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
             OMX_IndexParamPortDefinition, &def);
@@ -340,12 +342,8 @@ OmxCvImpl::~OmxCvImpl() {
  */
 void OmxCvImpl::input_worker() {
     std::unique_lock<std::mutex> lock(m_input_mutex);
-    OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
     OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 1);
-    assert(in != NULL);
-    assert(out != NULL);
 
-    //FILE *fp = fopen("test.yuv", "wb");
     while (true) {
         m_input_signaller.wait(lock, [this]{return m_stop || m_input_queue.size() > 0;});
         if (m_stop) {
@@ -357,41 +355,28 @@ void OmxCvImpl::input_worker() {
         }
 
         //auto proc_start = steady_clock::now();
-        std::pair<cv::Mat, int64_t> frame = m_input_queue.front();
-        cv::Mat mat = frame.first;
+        std::pair<OMX_BUFFERHEADERTYPE *, int64_t> frame = m_input_queue.front();
         m_input_queue.pop_front();
         lock.unlock();
 
-        if (in == NULL) {
-            printf("NO INPUT BUFFER");
-        } else {
-            auto conv_start = steady_clock::now();
-            assert(mat.cols == m_width && mat.rows == m_height);
-            BGR2RGB(mat, in->pBuffer, m_stride);
-            in->nFilledLen = in->nAllocLen;
+        //auto conv_start = steady_clock::now();
+        //static int framecounter = 0;
 
-            static int framecounter = 0;
-            printf("BGR2RGB time (ms): %-3d [%d]\r", (int)TIMEDIFF(conv_start), ++framecounter);
-            fflush(stdout);
-
-            OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
-            //printf("Encoding time (ms): %d [%d]\r", (int)TIMEDIFF(conv_start), ++framecounter);
-            do {
-                out->nFilledLen = 0; //I don't think this is necessary, but whatever.
-                OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
-                out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 1);
-            } while (!write_data(out, frame.second));
-            in = ilclient_get_input_buffer(m_encoder_component, OMX_ENCODE_PORT_IN, 1);
-        }
+        OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), frame.first);
+        //fflush(stdout);
+        //printf("Encoding time (ms): %d [%d]\r", (int)TIMEDIFF(conv_start), ++framecounter);
+        do {
+            out->nFilledLen = 0; //I don't think this is necessary, but whatever.
+            OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
+            out = ilclient_get_output_buffer(m_encoder_component, OMX_ENCODE_PORT_OUT, 1);
+        } while (!write_data(out, frame.second));
 
         lock.lock();
         //printf("Total processing time (ms): %d\n", (int)TIMEDIFF(proc_start));
     }
 
-    //fclose(fp);
-    in->nFilledLen = 0;
-    in->nFlags |= OMX_BUFFERFLAG_EOS;
-    OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
+    //Needed because we call ilclient_get_output_buffer last.
+    //Otherwise ilclient waits forever for the buffer to be filled.
     OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
 }
 
@@ -501,24 +486,26 @@ bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
  * @return true iff enqueued.
  */
 bool OmxCvImpl::process(const cv::Mat &mat) {
-    cv::Mat ours = mat.clone();
+    OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(
+        m_encoder_component, OMX_ENCODE_PORT_IN, 0);
+    if (in == NULL) {
+        printf("No free buffer; dropping frame!\n");
+        return false;
+    }
 
+    assert(mat.cols == m_width && mat.rows == m_height);
     auto now = steady_clock::now();
-    std::unique_lock<std::mutex> lock(m_input_mutex);
+    BGR2RGB(mat, in->pBuffer, m_stride);
+    in->nFilledLen = in->nAllocLen;
 
+    std::unique_lock<std::mutex> lock(m_input_mutex);
     if (m_frame_count++ == 0) {
         m_frame_start = now;
     }
-
-    if (m_input_queue.size() > 5) {
-        printf("Queue too large; dropping frames!\n");
-        m_input_queue.pop_front();
-    }
-
-    m_input_queue.push_back(std::pair<cv::Mat, int64_t>(ours, duration_cast<milliseconds>(now-m_frame_start).count()));
+    m_input_queue.push_back(std::pair<OMX_BUFFERHEADERTYPE *, int64_t>(
+        in, duration_cast<milliseconds>(now-m_frame_start).count()));
     lock.unlock();
     m_input_signaller.notify_one();
-
     return true;
 }
 
