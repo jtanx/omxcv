@@ -26,9 +26,9 @@ using std::chrono::duration_cast;
  * Based on http://stackoverflow.com/questions/11890997/using-arm-neon-intrinsics-to-add-alpha-and-permute
  * @param [in] src The source pointer (start of row).
  * @param [in] dst The destination pointer (start of row).
- * @param [in] numPix The number of pixels to swap.
+ * @param [in] n The number of pixels/8 to swap.
  */
-void BGR2RGB_NEON(unsigned char* src, unsigned char* dst, int numPix) {
+void BGR2RGB_NEON(unsigned char* src, unsigned char* dst, int n) {
     __asm__ volatile(
         "mov r2, r2, lsr #3\n"
         "loop:\n"
@@ -50,8 +50,9 @@ void BGR2RGB_NEON(unsigned char* src, unsigned char* dst, int numPix) {
  */
 void BGR2RGB(cv::Mat &src, uint8_t *dst, int stride) {
 #ifdef ENABLE_PI2_CONFIGS
+    int runs = src.cols/8;
     for (int i = 0; i < src.rows; i++) {
-        BGR2RGB_NEON(src.data+src.cols*i, dst+stride*i, src.cols);
+        BGR2RGB_NEON(src.data+src.cols*i, dst+stride*i, runs);
     }
 #else
     cv::Mat omat(src.rows, src.cols, CV_8UC3, dst, stride);
@@ -271,6 +272,17 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
             OMX_IndexParamVideoBitrate, &bitrate_type);
     CHECKED(ret != OMX_ErrorNone, "OMX_SetParameter failed for setting encoder bitrate.");
 
+    //I think this decreases the chance of NALUs being split across buffers.
+    /*
+    OMX_CONFIG_BOOLEANTYPE frg = {0};
+    frg.nSize = sizeof(OMX_CONFIG_BOOLEANTYPE);
+    frg.nVersion.nVersion = OMX_VERSION;
+    frg.bEnabled = OMX_TRUE;
+    ret = OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
+        OMX_IndexConfigMinimiseFragmentation, &frg);
+    CHECKED(ret != 0, "OMX_SetParameter failed for setting fragmentation minimisation.");
+    */
+
     //We want at most one NAL per output buffer that we receive.
     OMX_CONFIG_BOOLEANTYPE nal = {0};
     nal.nSize = sizeof(OMX_CONFIG_BOOLEANTYPE);
@@ -278,7 +290,7 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     nal.bEnabled = OMX_TRUE;
     ret = OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
         OMX_IndexParamBrcmNALSSeparate, &nal);
-    CHECKED(ret != 0, "OMX_SetParameter failed for setting separate NALUs");
+    CHECKED(ret != 0, "OMX_SetParameter failed for setting separate NALUs.");
 
     //We want the encoder to write the NALU length instead start codes.
     OMX_NALSTREAMFORMATTYPE nal2 = {0};
@@ -407,7 +419,6 @@ void OmxCvImpl::input_worker() {
  * @return true if buffer was saved.
  */
 bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
-    bool ret = true;
     uint8_t *buffer = out->pBuffer;
 
     //Do we already have a partial NALU?
@@ -443,23 +454,34 @@ bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
     }
 
     uint8_t naltype = buffer[4] & 0x1f;
-    if (m_initted_header) {
-        if (naltype == 7 || naltype == 8) {
-            return false;
-        }
-    } else {
+    const uint8_t sig[4] = {0x00, 0x00, 0x00, 0x01};
+
+    if (!m_initted_header) {
         if (naltype == 7) { //SPS
-            m_sps_length = out->nFilledLen - 4;
-            m_sps = new uint8_t[m_sps_length];
-            //Strip the NAL header.
-            memcpy(m_sps, buffer+4, m_sps_length);
-            ret = false;
+            uint8_t *ptr = (uint8_t*)memmem(buffer, out->nFilledLen, sig, 4);
+            if (ptr) {
+                m_sps_length = (ptr-buffer)-4;
+                m_sps = new uint8_t[m_sps_length];
+                memcpy(m_sps, buffer+4, m_sps_length);
+
+                m_pps_length = out->nFilledLen-8-m_sps_length;
+                m_pps = new uint8_t[m_pps_length];
+                memcpy(m_pps, ptr+4, m_pps_length);
+            } else {
+                m_sps_length = out->nFilledLen - 4;
+                m_sps = new uint8_t[m_sps_length];
+                //Strip the NAL header.
+                memcpy(m_sps, buffer+4, m_sps_length);
+            }
         } else if (naltype == 8) {
             m_pps_length = out->nFilledLen - 4;
             m_pps = new uint8_t[m_pps_length];
             //Strip the NAL header.
             memcpy(m_pps, buffer+4, m_pps_length);
-            ret = false;
+        } else {
+            printf("Warning: Got NALU (id %d) but no SPS/PPS set received!\n",
+                naltype);
+            return true;
         }
 
         if (m_sps && m_pps) {
@@ -467,11 +489,12 @@ bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
                 m_initted_header = true;
             }
         }
-    }
-
-    if (ret) { //We only reach here if we have a full NALU to write out.
+    } else if (naltype != 7 && naltype != 8){
+        //We only reach here if we have a full NALU to write out.
         AVPacket pkt;
         av_init_packet(&pkt);
+        //uint8_t *ptr = (uint8_t*)memmem(buffer, out->nFilledLen, sig, 4);
+        //assert(ptr == NULL);
 
         pkt.stream_index = m_video_stream->index;
         pkt.pts = timestamp;
@@ -484,8 +507,9 @@ bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
         }
 
         av_write_frame(m_mux_ctx, &pkt);
+        return true;
     }
-    return ret;
+    return false;
 }
 
 /**
