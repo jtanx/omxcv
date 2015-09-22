@@ -20,26 +20,8 @@ using std::chrono::duration_cast;
 #define TIMEDIFF(start) (duration_cast<milliseconds>(steady_clock::now() - start).count())
 #define CHECKED(c, v) if ((c)) throw std::invalid_argument(v)
 
-#ifdef ENABLE_PI2_CONFIGS
-/**
- * Converts one row of pixels from BGR to RGB.
- * Based on http://stackoverflow.com/questions/11890997/using-arm-neon-intrinsics-to-add-alpha-and-permute
- * @param [in] src The source pointer (start of row).
- * @param [in] dst The destination pointer (start of row).
- * @param [in] n The number of pixels/8 to swap.
- */
-void BGR2RGB_NEON(unsigned char* src, unsigned char* dst, int n) {
-    __asm__ volatile(
-        "mov r2, r2, lsr #3\n"
-        "loop:\n"
-            "vld3.8 {d0-d2}, [r0]!\n"
-            "subs r2, r2, #1\n"
-            "vswp d0, d2\n"
-            "vst3.8 {d0-d3}, [r1]!\n"
-            "bgt loop\n"
-        "bx lr\n"
-    );
-}
+#ifdef ENABLE_NEON
+extern "C" void omxcv_bgr2rgb_neon(unsigned char *src, unsigned char *dst, int n);
 #endif
 
 /**
@@ -49,10 +31,11 @@ void BGR2RGB_NEON(unsigned char* src, unsigned char* dst, int n) {
  * @param [in] stride The stride of the image.
  */
 void BGR2RGB(cv::Mat &src, uint8_t *dst, int stride) {
-#ifdef ENABLE_PI2_CONFIGS
+#ifdef ENABLE_NEON
     int runs = src.cols/8;
     for (int i = 0; i < src.rows; i++) {
-        BGR2RGB_NEON(src.data+src.cols*i, dst+stride*i, runs);
+        uint8_t *buffer = src.ptr<uint8_t>(i);
+        omxcv_bgr2rgb_neon(buffer, dst+stride*i, runs);
     }
 #else
     cv::Mat omat(src.rows, src.cols, CV_8UC3, dst, stride);
@@ -382,14 +365,14 @@ void OmxCvImpl::input_worker() {
         if (in == NULL) {
             printf("NO INPUT BUFFER");
         } else {
-            //auto conv_start = steady_clock::now();
+            auto conv_start = steady_clock::now();
             assert(mat.cols == m_width && mat.rows == m_height);
             BGR2RGB(mat, in->pBuffer, m_stride);
             in->nFilledLen = in->nAllocLen;
 
-            //static int framecounter = 0;
-            //printf("BGR2RGB time (ms): %-3d [%d]\r", (int)TIMEDIFF(conv_start), ++framecounter);
-            //fflush(stdout);
+            static int framecounter = 0;
+            printf("BGR2RGB time (ms): %-3d [%d]\r", (int)TIMEDIFF(conv_start), ++framecounter);
+            fflush(stdout);
 
             OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), in);
             //printf("Encoding time (ms): %d [%d]\r", (int)TIMEDIFF(conv_start), ++framecounter);

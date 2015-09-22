@@ -44,10 +44,7 @@ link_directories (/opt/vc/lib /opt/vc/src/hello_pi/libs/ilclient)
 
 #Compile options
 if (CMAKE_COMPILER_IS_GNUCXX)
-	set (CMAKE_CXX_FLAGS "-Wall -Wno-variadic-macros -std=c++11 -pedantic -gdwarf-3")
-	if (ENABLE_PI2_CONFIGS)
-		set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -mcpu=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard")
-	endif (ENABLE_PI2_CONFIGS)
+	set (CMAKE_CXX_FLAGS "-Wall -Wno-variadic-macros -std=c++11 -pedantic -g")
 endif (CMAKE_COMPILER_IS_GNUCXX)
 
 #Source files
@@ -61,6 +58,13 @@ set (SOURCE
     image_gpu.cpp
     omxcv.cpp
 )
+
+#Enable NEON extensions
+if (ENABLE_NEON)
+    set (SOURCE ${SOURCE} bgr2rgb.s)
+    set_property (SOURCE bgr2rgb.s PROPERTY LANGUAGE C)
+    set_source_files_properties (bgr2rgb.s PROPERTIES COMPILE_FLAGS -mfpu=neon)
+endif (ENABLE_NEON)
 
 #Generate config header
 configure_file (omxcv-config.h.in omxcv-config.h)

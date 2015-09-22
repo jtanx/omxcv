@@ -12,6 +12,6 @@
 #define OMXCV_DATE "${OMXCV_DATE}"
 
 /* Enable Pi 2 (armv7/NEON) stuff */
-#cmakedefine ENABLE_PI2_CONFIGS
+#cmakedefine ENABLE_NEON
 
 #endif /* __OMXCV_CONFIG_H */
