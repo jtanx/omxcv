@@ -18,7 +18,7 @@ namespace omxcv {
     class OmxCv {
         public:
             OmxCv(const char *name, int width, int height, int bitrate=3000, int fpsnum=25, int fpsden=1);
-            void Encode(const cv::Mat &in);
+            bool Encode(const cv::Mat &in);
             virtual ~OmxCv();
         private:
             OmxCvImpl *m_impl;

@@ -48,10 +48,11 @@ int main(int argc, char *argv[]) {
     cv::Mat image;
     for(int i = 0; i < framecount; i++) {
         capture >> image;
-        //auto start = steady_clock::now();
-        e.Encode(image);
-        //printf("Processed frame %d (%d ms)\r", i+1, (int)TIMEDIFF(start));
-        //fflush(stdout);
+        auto start = steady_clock::now();
+        if (e.Encode(image)) {
+            printf("Processed frame %4d (%4d ms)\r", i+1, (int)TIMEDIFF(start));
+            fflush(stdout);
+        }
     }
 
     //FILE *fp = fopen("Orig.rgb", "wb");

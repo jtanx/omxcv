@@ -32,10 +32,9 @@ extern "C" void omxcv_bgr2rgb_neon(const unsigned char *src, unsigned char *dst,
  */
 void BGR2RGB(const cv::Mat &src, uint8_t *dst, int stride) {
 #ifdef ENABLE_NEON
-    int runs = src.cols/8;
     for (int i = 0; i < src.rows; i++) {
         const uint8_t *buffer = src.ptr<const uint8_t>(i);
-        omxcv_bgr2rgb_neon(buffer, dst+stride*i, runs);
+        omxcv_bgr2rgb_neon(buffer, dst+stride*i, src.cols);
     }
 #else
     cv::Mat omat(src.rows, src.cols, CV_8UC3, dst, stride);
@@ -533,6 +532,6 @@ OmxCv::~OmxCv() {
  * Encode image.
  * @param [in] in Image to be encoded.
  */
-void OmxCv::Encode(const cv::Mat &in) {
-    m_impl->process(in);
+bool OmxCv::Encode(const cv::Mat &in) {
+    return m_impl->process(in);
 }
