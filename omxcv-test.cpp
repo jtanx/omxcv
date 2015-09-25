@@ -10,10 +10,11 @@
 #include <chrono>
 #include <thread>
 
-#define TIMEDIFF(start) (duration_cast<milliseconds>(steady_clock::now() - start).count())
+#define TIMEDIFF(start) (duration_cast<microseconds>(steady_clock::now() - start).count())
 
 using omxcv::OmxCv;
 using std::this_thread::sleep_for;
+using std::chrono::microseconds;
 using std::chrono::milliseconds;
 using std::chrono::steady_clock;
 using std::chrono::duration_cast;
@@ -46,14 +47,18 @@ int main(int argc, char *argv[]) {
 
     auto totstart = steady_clock::now();
     cv::Mat image;
+    FILE *fp = fopen("log.txt", "w");
+    
     for(int i = 0; i < framecount; i++) {
         capture >> image;
         auto start = steady_clock::now();
         if (e.Encode(image)) {
-            printf("Processed frame %4d (%4d ms)\r", i+1, (int)TIMEDIFF(start));
-            fflush(stdout);
+            //printf("Processed frame %4d (%4d ms)\r", i+1, (int)TIMEDIFF(start));
+            fprintf(fp, "%d\n", (int)TIMEDIFF(start));
+            //fflush(stdout);
         }
     }
+    fclose(fp);
 
     //FILE *fp = fopen("Orig.rgb", "wb");
     //fwrite(image.data, 3 * image.cols * image.rows, 1, fp);
