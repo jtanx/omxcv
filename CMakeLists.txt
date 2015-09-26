@@ -57,13 +57,14 @@ set (HEADERS
 set (SOURCE
     image_gpu.cpp
     omxcv.cpp
+    omxcv_jpeg.cpp
 )
 
 #Enable NEON extensions
 if (ENABLE_NEON)
     set (SOURCE ${SOURCE} bgr2rgb.s)
     set_property (SOURCE bgr2rgb.s PROPERTY LANGUAGE C)
-    set_source_files_properties (bgr2rgb.s PROPERTIES COMPILE_FLAGS "-mfpu=neon -mcpu=cortex-a7")
+    set_source_files_properties (bgr2rgb.s PROPERTIES COMPILE_FLAGS "-mfpu=neon -mcpu=cortex-a7 -g")
 endif (ENABLE_NEON)
 
 #Generate config header

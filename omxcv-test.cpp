@@ -13,6 +13,7 @@
 #define TIMEDIFF(start) (duration_cast<microseconds>(steady_clock::now() - start).count())
 
 using omxcv::OmxCv;
+using omxcv::OmxCvJpeg;
 using std::this_thread::sleep_for;
 using std::chrono::microseconds;
 using std::chrono::milliseconds;
@@ -44,7 +45,8 @@ int main(int argc, char *argv[]) {
     capture.set(CV_CAP_PROP_FPS, 30);
 
     OmxCv e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
-
+    //OmxCvJpeg j((int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT));
+    
     auto totstart = steady_clock::now();
     cv::Mat image;
     FILE *fp = fopen("log.txt", "w");
@@ -52,6 +54,7 @@ int main(int argc, char *argv[]) {
     for(int i = 0; i < framecount; i++) {
         capture >> image;
         auto start = steady_clock::now();
+        //if (j.Encode("save.jpg", image)) {
         if (e.Encode(image)) {
             //printf("Processed frame %4d (%4d ms)\r", i+1, (int)TIMEDIFF(start));
             fprintf(fp, "%d\n", (int)TIMEDIFF(start));

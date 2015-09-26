@@ -43,8 +43,15 @@ extern "C" {
 #define OMX_ENCODE_PORT_IN  200
 #define OMX_ENCODE_PORT_OUT 201
 
+#define OMX_JPEG_PORT_IN  340
+#define OMX_JPEG_PORT_OUT 341
+
 //The maximum size of a NALU. We'll just assume 512 KB.
 #define MAX_NALU_SIZE (512*1024)
+
+#define CHECKED(c, v) if ((c)) throw std::invalid_argument(v)
+
+extern void BGR2RGB(const cv::Mat &src, uint8_t *dst, int stride);
 
 namespace omxcv {
     /**
@@ -86,6 +93,27 @@ namespace omxcv {
             bool dump_codec_private();
             void input_worker();
             bool write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp);
+    };
+    
+    class OmxCvJpegImpl {
+        public:
+            OmxCvJpegImpl(int width, int height, int quality=90);
+            virtual ~OmxCvJpegImpl();
+            
+            bool process(const char *filename, const cv::Mat &mat);
+        private:
+            int m_width, m_height, m_stride, m_quality;
+            
+            std::condition_variable m_input_signaller;
+            std::deque<std::pair<OMX_BUFFERHEADERTYPE *, std::string>> m_input_queue;
+            std::thread m_input_worker;
+            std::mutex  m_input_mutex;
+            std::atomic<bool> m_stop;
+            
+            ILCLIENT_T *m_ilclient;
+            COMPONENT_T *m_encoder_component;
+            
+            void input_worker();
     };
 }
 

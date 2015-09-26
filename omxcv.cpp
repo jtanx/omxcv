@@ -18,7 +18,6 @@ using std::chrono::duration_cast;
 #include <ctime>
 
 #define TIMEDIFF(start) (duration_cast<milliseconds>(steady_clock::now() - start).count())
-#define CHECKED(c, v) if ((c)) throw std::invalid_argument(v)
 
 #ifdef ENABLE_NEON
 extern "C" void omxcv_bgr2rgb_neon(const unsigned char *src, unsigned char *dst, int n);
@@ -531,6 +530,7 @@ OmxCv::~OmxCv() {
 /**
  * Encode image.
  * @param [in] in Image to be encoded.
+ * @return true iff the image was encoded.
  */
 bool OmxCv::Encode(const cv::Mat &in) {
     return m_impl->process(in);
