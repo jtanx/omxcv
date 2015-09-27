@@ -23,7 +23,7 @@ using std::chrono::duration_cast;
 int main(int argc, char *argv[]) {
     cv::VideoCapture capture(-1);
 
-    int width = 640, height = 480, framecount = 200;
+    int width = 640, height = 480, framecount = 200, processed = 0;
 
     if (argc >= 3) {
         width = atoi(argv[1]);
@@ -44,31 +44,33 @@ int main(int argc, char *argv[]) {
     capture.set(CV_CAP_PROP_FRAME_HEIGHT, height);
     capture.set(CV_CAP_PROP_FPS, 30);
 
-    OmxCv e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
-    //OmxCvJpeg j((int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT));
+    //OmxCv e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
+    OmxCvJpeg j((int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT));
     
     auto totstart = steady_clock::now();
     cv::Mat image;
-    FILE *fp = fopen("log.txt", "w");
+    //FILE *fp = fopen("log.txt", "w");
     
     for(int i = 0; i < framecount; i++) {
         capture >> image;
         auto start = steady_clock::now();
-        //if (j.Encode("save.jpg", image)) {
-        if (e.Encode(image)) {
-            //printf("Processed frame %4d (%4d ms)\r", i+1, (int)TIMEDIFF(start));
-            fprintf(fp, "%d\n", (int)TIMEDIFF(start));
-            //fflush(stdout);
+        if (j.Encode("save.jpg", image)) {
+        //if (e.Encode(image)) {
+            printf("Processed frame %4d (%4d ms)\r", i+1, (int)TIMEDIFF(start)/1000);
+            fflush(stdout);
+            //fprintf(fp, "%d\n", (int)TIMEDIFF(start));
+            processed++;
         }
     }
-    fclose(fp);
+    //fclose(fp);
 
     //FILE *fp = fopen("Orig.rgb", "wb");
     //fwrite(image.data, 3 * image.cols * image.rows, 1, fp);
     //fclose(fp);
     //picopter::DisplayShit(image.cols, image.rows, image.data);
 
-    printf("Average FPS: %.2f\n", (framecount * 1000) / (float)TIMEDIFF(totstart));
+    printf("Average FPS: %.2f\n", (processed * 1000000) / (float)TIMEDIFF(totstart));
+    printf("Processed: %d, Dropped: %d\n", processed, framecount-processed);
     printf("DEPTH: %d, WIDTH: %d, HEIGHT: %d, IW: %d\n", image.depth(), image.cols, image.rows, static_cast<int>(image.step));
     sleep_for(milliseconds(300));
 

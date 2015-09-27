@@ -18,14 +18,15 @@ OmxCvJpegImpl::OmxCvJpegImpl(int width, int height, int quality)
 {
     int ret;
     bcm_host_init();
-    OMX_Init();
 
+    //Initialise OpenMAX and the IL client.
+    CHECKED(OMX_Init() != OMX_ErrorNone, "OMX_Init failed.");
     m_ilclient = ilclient_init();
     CHECKED(m_ilclient == NULL, "ILClient initialisation failed.");
 
     ret = ilclient_create_component(m_ilclient, &m_encoder_component,
             (char*)"image_encode",
-            (ILCLIENT_CREATE_FLAGS_T)(ILCLIENT_DISABLE_ALL_PORTS | 
+            (ILCLIENT_CREATE_FLAGS_T)(ILCLIENT_DISABLE_ALL_PORTS |
             ILCLIENT_ENABLE_INPUT_BUFFERS | ILCLIENT_ENABLE_OUTPUT_BUFFERS));
     CHECKED(ret != 0, "ILCient image_encode component creation failed.");
 
@@ -53,10 +54,10 @@ OmxCvJpegImpl::OmxCvJpegImpl(int width, int height, int quality)
     ret = OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
             OMX_IndexParamPortDefinition, &def);
     CHECKED(ret != OMX_ErrorNone, "OMX_SetParameter failed for input format definition.");
-    
+
     //Set the output format of the encoder
     OMX_IMAGE_PARAM_PORTFORMATTYPE format = {0};
-    format.nSize = sizeof(OMX_VIDEO_PARAM_PORTFORMATTYPE);
+    format.nSize = sizeof(OMX_IMAGE_PARAM_PORTFORMATTYPE);
     format.nVersion.nVersion = OMX_VERSION;
     format.nPortIndex = OMX_JPEG_PORT_OUT;
     format.eCompressionFormat = OMX_IMAGE_CodingJPEG;
@@ -64,14 +65,14 @@ OmxCvJpegImpl::OmxCvJpegImpl(int width, int height, int quality)
     ret = OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
             OMX_IndexParamImagePortFormat, &format);
     CHECKED(ret != OMX_ErrorNone, "OMX_SetParameter failed for setting encoder output format.");
-    
+
     //Set the encoder quality
     OMX_IMAGE_PARAM_QFACTORTYPE qfactor = {0};
     qfactor.nSize = sizeof(OMX_IMAGE_PARAM_QFACTORTYPE);
     qfactor.nVersion.nVersion = OMX_VERSION;
     qfactor.nPortIndex = OMX_JPEG_PORT_OUT;
     qfactor.nQFactor = m_quality;
-    
+
     ret = OMX_SetParameter(ILC_GET_HANDLE(m_encoder_component),
             OMX_IndexParamQFactor, &qfactor);
     CHECKED(ret != OMX_ErrorNone, "OMX_SetParameter failed for setting encoder quality.");
@@ -120,7 +121,7 @@ void OmxCvJpegImpl::input_worker() {
                 break;
             }
         }
-        
+
         std::pair<OMX_BUFFERHEADERTYPE *, std::string> frame = m_input_queue.front();
         m_input_queue.pop_front();
         lock.unlock();
@@ -129,7 +130,7 @@ void OmxCvJpegImpl::input_worker() {
         if (!fp) {
             perror(frame.second.c_str());
         }
-        
+
         OMX_EmptyThisBuffer(ILC_GET_HANDLE(m_encoder_component), frame.first);
         do {
             OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
@@ -137,7 +138,7 @@ void OmxCvJpegImpl::input_worker() {
             if (fp) {
                 fwrite(out->pBuffer, 1, out->nFilledLen, fp);
             }
-        } while (out->nFilledLen == out->nAllocLen);
+        } while (!(out->nFlags & OMX_BUFFERFLAG_ENDOFFRAME));
 
         fclose(fp);
         lock.lock();
@@ -153,7 +154,7 @@ bool OmxCvJpegImpl::process(const char *filename, const cv::Mat &mat) {
     //cv::imwrite(filename, mat, saveparams);
     OMX_BUFFERHEADERTYPE *in = ilclient_get_input_buffer(
         m_encoder_component, OMX_JPEG_PORT_IN, 0);
-    if (in == NULL) { //No free buffer. 
+    if (in == NULL) { //No free buffer.
         return false;
     }
 
@@ -196,7 +197,7 @@ OmxCvJpeg::~OmxCvJpeg() {
  * Encode image.
  * @param [in] filename The path to save the image to.
  * @param [in] in Image to be encoded.
- * @param [in] fallback If set to true and there is no available buffer for 
+ * @param [in] fallback If set to true and there is no available buffer for
  * encoding, fallback to using OpenCV to write out the image.
  * @return true iff the file was encoded.
  */
