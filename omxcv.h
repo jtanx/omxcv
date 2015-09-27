@@ -36,7 +36,7 @@ namespace omxcv {
             virtual ~OmxCvJpeg();
          private:
             OmxCvJpegImpl *m_impl;
-            int m_quality;
+            int m_width, m_height, m_quality;
      };
 }
 

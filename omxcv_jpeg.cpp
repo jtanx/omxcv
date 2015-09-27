@@ -39,8 +39,8 @@ OmxCvJpegImpl::OmxCvJpegImpl(int width, int height, int quality)
             OMX_IndexParamPortDefinition, &def);
     CHECKED(ret != OMX_ErrorNone, "OMX_GetParameter failed for encode port in.");
 
-    //We allocate 6 input buffers.
-    def.nBufferCountActual = 6;
+    //We allocate 3 input buffers.
+    def.nBufferCountActual = 3;
     def.format.image.nFrameWidth = m_width;
     def.format.image.nFrameHeight = m_height;
     //16 byte alignment. I don't know if these also hold for image encoding.
@@ -181,7 +181,9 @@ bool OmxCvJpegImpl::process(const char *filename, const cv::Mat &mat) {
  * @param [in] fpsden The FPS denominator.
  */
 OmxCvJpeg::OmxCvJpeg(int width, int height, int quality)
-: m_quality(quality)
+: m_width(width)
+, m_height(height)
+, m_quality(quality)
 {
     m_impl = new OmxCvJpegImpl(width, height, quality);
 }
@@ -202,6 +204,11 @@ OmxCvJpeg::~OmxCvJpeg() {
  * @return true iff the file was encoded.
  */
 bool OmxCvJpeg::Encode(const char *filename, const cv::Mat &in, bool fallback) {
+    if (in.cols != m_width || in.rows != m_height || in.type() != CV_8UC3) {
+        std::vector<int> params {CV_IMWRITE_JPEG_QUALITY, m_quality};
+        return cv::imwrite(filename, in, params);
+    }
+
     bool ret = m_impl->process(filename, in);
     if (!ret && fallback) {
         std::vector<int> params {CV_IMWRITE_JPEG_QUALITY, m_quality};
