@@ -187,7 +187,6 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
 {
     int ret;
     bcm_host_init();
-    OMX_Init();
 
     if (fpsden <= 0 || fpsnum <= 0) {
         fpsden = 1;
@@ -198,6 +197,8 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
     //Initialise the scaler and output file
     CHECKED(!lav_init(), "Failed to initialise LibAVFormat.");
 
+    //Initialise OpenMAX and the IL client.
+    CHECKED(OMX_Init() != OMX_ErrorNone, "OMX_Init failed.");
     m_ilclient = ilclient_init();
     CHECKED(m_ilclient == NULL, "ILClient initialisation failed.");
 
@@ -218,7 +219,7 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
 
     def.format.video.nFrameWidth = m_width;
     def.format.video.nFrameHeight = m_height;
-    def.format.video.xFramerate = 25 << 16;
+    def.format.video.xFramerate = 30 << 16;
     //Must be a multiple of 16
     def.format.video.nSliceHeight = (m_height + 15) & ~15;
     //Must be a multiple of 32
@@ -246,7 +247,7 @@ OmxCvImpl::OmxCvImpl(const char *name, int width, int height, int bitrate, int f
 
     //Set the encoding bitrate
     OMX_VIDEO_PARAM_BITRATETYPE bitrate_type = {0};
-    bitrate_type.nSize = sizeof(OMX_VIDEO_PARAM_PORTFORMATTYPE);
+    bitrate_type.nSize = sizeof(OMX_VIDEO_PARAM_BITRATETYPE);
     bitrate_type.nVersion.nVersion = OMX_VERSION;
     bitrate_type.eControlRate = OMX_Video_ControlRateVariable;
     bitrate_type.nTargetBitrate = bitrate * 1000;

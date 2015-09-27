@@ -24,12 +24,15 @@ extern "C" {
 #include <libavutil/mathematics.h>
 #include <libavformat/avio.h>
 
+//Without the right struct packing the buffers will be screwed...
+//nFlags won't be set correctly...
+#pragma pack(4)
 #include <bcm_host.h>
 #include <ilclient.h>
-}
-
 //For OMX_IndexParamNalStreamFormatSelect
 #include <OMX_Broadcom.h>
+#pragma pack()
+}
 
 //Determine what frame allocation routine to use
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(55,28,1)
