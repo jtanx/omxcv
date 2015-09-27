@@ -9,6 +9,13 @@
 
 using namespace omxcv;
 
+/**
+ * Constructor.
+ * @param [in] width The width of the image to encode.
+ * @param [in] height The height of the image to encode.
+ * @param [in] quality The JPEG quality factor (1-100). 100 is best quality.
+ * @throws std::invalid_argument on error.
+ */
 OmxCvJpegImpl::OmxCvJpegImpl(int width, int height, int quality)
 : m_width(width)
 , m_height(height)
@@ -90,6 +97,9 @@ OmxCvJpegImpl::OmxCvJpegImpl(int width, int height, int quality)
     m_input_worker = std::thread(&OmxCvJpegImpl::input_worker, this);
 }
 
+/**
+ * Destructor.
+ */
 OmxCvJpegImpl::~OmxCvJpegImpl() {
     m_stop = true;
     m_input_signaller.notify_one();
@@ -108,6 +118,9 @@ OmxCvJpegImpl::~OmxCvJpegImpl() {
     ilclient_destroy(m_ilclient);
 }
 
+/**
+ * Worker thread. Encodes the images.
+ */
 void OmxCvJpegImpl::input_worker() {
     std::unique_lock<std::mutex> lock(m_input_mutex);
     OMX_BUFFERHEADERTYPE *out = ilclient_get_output_buffer(m_encoder_component, OMX_JPEG_PORT_OUT, 1);
@@ -140,7 +153,9 @@ void OmxCvJpegImpl::input_worker() {
             }
         } while (!(out->nFlags & OMX_BUFFERFLAG_ENDOFFRAME));
 
-        fclose(fp);
+        if (fp) {
+            fclose(fp);
+        }
         lock.lock();
     }
 
@@ -149,6 +164,13 @@ void OmxCvJpegImpl::input_worker() {
     OMX_FillThisBuffer(ILC_GET_HANDLE(m_encoder_component), out);
 }
 
+/**
+ * Process a frame.
+ * @param [in] filename The filename to save to.
+ * @param [in] mat The image data to save.
+ * @return true iff the image will be saved. Will return false if there's no
+ *         free input buffer.
+ */
 bool OmxCvJpegImpl::process(const char *filename, const cv::Mat &mat) {
     //static const std::vector<int> saveparams = {CV_IMWRITE_JPEG_QUALITY, 75};
     //cv::imwrite(filename, mat, saveparams);
@@ -198,7 +220,9 @@ OmxCvJpeg::~OmxCvJpeg() {
 /**
  * Encode image.
  * @param [in] filename The path to save the image to.
- * @param [in] in Image to be encoded.
+ * @param [in] in Image to be encoded. If the width and height of this
+ *                image does not match what was set in the constructor,
+ *                this function will fallback to using OpenCV's imwrite.
  * @param [in] fallback If set to true and there is no available buffer for
  * encoding, fallback to using OpenCV to write out the image.
  * @return true iff the file was encoded.
