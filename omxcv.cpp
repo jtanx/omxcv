@@ -469,7 +469,7 @@ bool OmxCvImpl::write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp) {
         pkt.size = out->nFilledLen;
 
         //Check for IDR frames (keyframes)
-        if ((pkt.data[4] & 0x1f) == 5) {
+        if (naltype == 5) {
             pkt.flags |= AV_PKT_FLAG_KEY;
         }
 
