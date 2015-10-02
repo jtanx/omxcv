@@ -44,8 +44,8 @@ int main(int argc, char *argv[]) {
     capture.set(CV_CAP_PROP_FRAME_HEIGHT, height);
     capture.set(CV_CAP_PROP_FPS, 30);
 
-    //OmxCv e((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
-    OmxCvJpeg j((int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT));
+    OmxCv *e = new OmxCv((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
+    //OmxCvJpeg *j = new OmxCvJpeg((int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT));
     
     auto totstart = steady_clock::now();
     cv::Mat image;
@@ -53,11 +53,11 @@ int main(int argc, char *argv[]) {
     
     for(int i = 0; i < framecount; i++) {
         capture >> image;
-        auto start = steady_clock::now();
-        if (j.Encode("save.jpg", image)) {
-        //if (e.Encode(image)) {
-            printf("Processed frame %4d (%4d ms)\r", i+1, (int)TIMEDIFF(start)/1000);
-            fflush(stdout);
+        //auto start = steady_clock::now();
+        //if (j->Encode("save.jpg", image)) {
+        if (e->Encode(image)) {
+            //printf("Processed frame %4d (%4d ms)\r", i+1, (int)TIMEDIFF(start)/1000);
+            //fflush(stdout);
             //fprintf(fp, "%d\n", (int)TIMEDIFF(start));
             processed++;
         }
@@ -68,11 +68,14 @@ int main(int argc, char *argv[]) {
     //fwrite(image.data, 3 * image.cols * image.rows, 1, fp);
     //fclose(fp);
     //picopter::DisplayShit(image.cols, image.rows, image.data);
+    
+    delete e;
+    //delete j;
 
     printf("Average FPS: %.2f\n", (processed * 1000000) / (float)TIMEDIFF(totstart));
     printf("Processed: %d, Dropped: %d\n", processed, framecount-processed);
     printf("DEPTH: %d, WIDTH: %d, HEIGHT: %d, IW: %d\n", image.depth(), image.cols, image.rows, static_cast<int>(image.step));
-    sleep_for(milliseconds(300));
+    //sleep_for(milliseconds(300));
 
     //bcm_host_deinit();
 }
