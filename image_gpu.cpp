@@ -95,13 +95,6 @@ void picopter::DisplayShit(int width, int height, void *data) {
     printf("\nLOAD TIME: %d ms\n", (int)TIMEDIFF(start));
 
     //xyzw
-    /*static const GLfloat quad_vertex_positions[] = {
-        -1.0f, -1.0f, 1.0f, 1.0f,
-        1.0f,  -1.0f, 1.0f, 1.0f,
-        -1.0f, 1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f, 1.0f
-    };*/
-
     static const GLfloat quad_vertex_positions[] = {
         0.0f, 0.0f, 1.0f, 1.0f,
         1.0f, 0.0f, 1.0f, 1.0f,
@@ -133,6 +126,8 @@ void picopter::DoMoreShit(EGLDisplay display, EGLSurface surface, GLuint buffer,
     check();
 
     glUniform1i(glGetUniformLocation(program,"tex"), 0);
+    glUniform4f(glGetUniformLocation(program, "threshLow"),0,167/255.0, 86/255.0,0);
+    glUniform4f(glGetUniformLocation(program, "threshHigh"),255/255.0,255/255.0, 141/255.0,1);
     check();
 
     glBindBuffer(GL_ARRAY_BUFFER, buffer);   check();
@@ -158,9 +153,8 @@ void picopter::DoMoreShit(EGLDisplay display, EGLSurface surface, GLuint buffer,
     //check();
 
     //glFinish();
-
-    /*
-    void *out = malloc(3 * texture.GetWidth() * texture.GetHeight());
+    
+    /*void *out = malloc(3 * texture.GetWidth() * texture.GetHeight());
     texture.GetRenderedData(out);
     FILE *fp = fopen("TEMP.RGB", "wb");
     fwrite(out, 3 * texture.GetWidth() * texture.GetHeight(), 1, fp);

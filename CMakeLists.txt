@@ -87,4 +87,6 @@ endif (HAVE_LIBPROFILER)
 
 #Test executable
 add_executable (omxcv-test omxcv-test.cpp)
+add_executable (glsl-test glsl-test.cpp)
 target_link_libraries (omxcv-test LINK_PUBLIC omxcv)
+target_link_libraries (glsl-test LINK_PUBLIC omxcv)
