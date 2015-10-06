@@ -6,48 +6,51 @@
 #ifndef _PICOPTERX_IMAGE_GPU_H
 #define _PICOPTERX_IMAGE_GPU_H
 
+#include <opencv2/opencv.hpp>
+#include <EGL/egl.h>
 #include <GLES2/gl2.h>
- #include <EGL/egl.h>
 
 namespace picopter {
     /* Forward declaration of the options class */
     class Options;
+    /* Forward declaration of the GLProgram class */
+    class GLProgram;
+    /* Forward declaration of the GLTexture class */
+    class GLTexture;
     
-    class GLProgram {
-        public:
-            GLProgram(const char *vertex_file, const char *fragment_file);
-            virtual ~GLProgram();
-
-            GLuint GetId();
-            operator GLuint() { return m_program_id; };
-        private:
-            GLuint m_vertex_id, m_fragment_id, m_program_id;
-
-            GLuint LoadShader(GLenum shader_type, const char *source_file);
-            char* ReadFile(const char *file);
-    };
-
-    class GLTexture {
-        public:
-            GLTexture(GLsizei width, GLsizei height, GLint type);
-            virtual ~GLTexture();
-
-            GLsizei GetWidth();
-            GLsizei GetHeight();
-
-            void SetData(void *data);
-            void GetRenderedData(void *buffer);
-            GLuint GetTextureId();
-            GLuint GetFramebufferId();
-            operator GLuint() { return m_texture_id; };
-        private:
-            GLsizei m_width, m_height;
-            GLint m_type;
-            GLuint m_texture_id, m_framebuffer_id;
-    };
-
-    extern void DoMoreShit(EGLDisplay display, EGLSurface surface, GLuint buffer, picopter::GLProgram &program, picopter::GLTexture &texture);
-    extern void DisplayShit(int width, int height, void *data);
+    typedef struct ThresholdSet {
+        int x;
+        int y;
+        int z;
+    } ThresholdSet;
+    
+    /**
+     * Class to perform colour thresholding using OpenGL.
+     */
+    class GLThreshold {
+            public:
+                GLThreshold(Options *opts, int width, int height);
+                GLThreshold(int width, int height);
+                virtual ~GLThreshold();
+                
+                void SetThresholds(ThresholdSet min, ThresholdSet max);
+                void Threshold(const cv::Mat &in, cv::Mat &out);
+            private:
+                int m_width, m_height;
+                ThresholdSet m_thresh_min, m_thresh_max;
+                GLProgram *m_program;
+                GLTexture *m_texture;
+                
+                EGLDisplay m_display;
+                EGLSurface m_surface;
+                GLuint m_quad_buffer;
+                
+                /** Copy constructor (disabled) **/
+                GLThreshold(const GLThreshold &other);
+                /** Assignment operator (disabled) **/
+                GLThreshold& operator= (const GLThreshold &other);
+        };
+    
 }
-
-#endif // _PICOPTERX_IMAGE_GPU_H
+    
+#endif

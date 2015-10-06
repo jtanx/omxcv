@@ -46,11 +46,16 @@ int main(int argc, char *argv[]) {
     capture.set(CV_CAP_PROP_FPS, 30);
     
     auto totstart = steady_clock::now();
-    cv::Mat image;
+    cv::Mat image, out;
     //FILE *fp = fopen("log.txt", "w");
+    
+    GLThreshold t(capture.get(CV_CAP_PROP_FRAME_WIDTH), capture.get(CV_CAP_PROP_FRAME_HEIGHT));
     
     for(int i = 0; i < framecount; i++) {
         capture >> image;
-        DisplayShit(image.cols, image.rows, image.data);
+        auto start = steady_clock::now();
+        t.Threshold(image, out);
+        printf("Processed frame %4d (%4d ms)\r", i+1, (int)TIMEDIFF(start)/1000);
+        fflush(stdout);
     }
 }

@@ -4,6 +4,7 @@
  */
 
 #include "image_gpu.h"
+#include "image_gpu_private.h"
 #include <assert.h>
 #include <error.h>
 
@@ -19,13 +20,20 @@ using std::chrono::milliseconds;
 using std::chrono::steady_clock;
 using std::chrono::duration_cast;
 
+#define CHECKED(c, v) if ((c)) throw std::invalid_argument(v)
+#define GLCHECKED(c, v) if ((c) || glGetError() != 0) throw std::invalid_argument(v)
 #define TIMEDIFF(start) (duration_cast<milliseconds>(steady_clock::now() - start).count())
 
 #define check() assert(glGetError() == 0)
 
 using namespace picopter;
 
-void picopter::DisplayShit(int width, int height, void *data) {
+GLThreshold::GLThreshold(Options *opts, int width, int height)
+: m_width(width)
+, m_height(height)
+, m_thresh_min{}
+, m_thresh_max{}
+{
     EGLBoolean result;
     EGLint num_config;
     
@@ -47,53 +55,39 @@ void picopter::DisplayShit(int width, int height, void *data) {
 	EGLConfig config;
     
     //Get a display
-    EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    assert(display!=EGL_NO_DISPLAY);
-	check();
+    m_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    GLCHECKED(m_display == EGL_NO_DISPLAY, "Cannot get EGL display.");
     
-    // initialize the EGL display connection
-	result = eglInitialize(display, NULL, NULL);
-	assert(EGL_FALSE != result);
-	check();
+    //Initialise the EGL display connection
+	result = eglInitialize(m_display, NULL, NULL);
+    GLCHECKED(result == EGL_FALSE, "Cannot initialise display connection.");
     
-    // get an appropriate EGL frame buffer configuration
-	result = eglChooseConfig(display, attribute_list, &config, 1, &num_config);
-	assert(EGL_FALSE != result);
-	check();
+    //Get an appropriate EGL frame buffer configuration
+	result = eglChooseConfig(m_display, attribute_list, &config, 1, &num_config);
+    GLCHECKED(result == EGL_FALSE, "Cannot get buffer configuration.");
 
-	// get an appropriate EGL frame buffer configuration
+	//Bind to the right EGL API.
 	result = eglBindAPI(EGL_OPENGL_ES_API);
-	assert(EGL_FALSE != result);
-	check();
+    GLCHECKED(result == EGL_FALSE, "Could not bind EGL API.");
 
-	// create an EGL rendering context
-	EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attributes);
-	assert(context!=EGL_NO_CONTEXT);
-	check();
+	//Create an EGL rendering context
+	EGLContext context = eglCreateContext(m_display, config, EGL_NO_CONTEXT, context_attributes);
+    GLCHECKED(context == EGL_NO_CONTEXT, "Could not create EGL context.");
     
-    // Create an offscreen rendering surface
+    //Create an offscreen rendering surface
     static const EGLint rendering_attributes[] =
 	{
         EGL_WIDTH, width,
         EGL_HEIGHT, height,
         EGL_NONE
     };
-    EGLSurface surface = eglCreatePbufferSurface(display, config, rendering_attributes);
-    assert(surface != EGL_NO_SURFACE);
-    check();
+    m_surface = eglCreatePbufferSurface(m_display, config, rendering_attributes);
+    GLCHECKED(m_surface == EGL_NO_SURFACE, "Could not create PBuffer surface.");
     
     //Bind the context to the current thread
-    result = eglMakeCurrent(display, surface, surface, context);
-    assert(result);
-    check();
-
-    picopter::GLProgram program("simplevertshader.glsl", "simplefragshader.glsl");
-    picopter::GLTexture texture(width, height, GL_RGB);
-
-    auto start = steady_clock::now();
-    texture.SetData(data);
-    printf("\nLOAD TIME: %d ms\n", (int)TIMEDIFF(start));
-
+    result = eglMakeCurrent(m_display, m_surface, m_surface, context);
+    GLCHECKED(result == EGL_FALSE, "Failed to bind context.");
+    
     //xyzw
     static const GLfloat quad_vertex_positions[] = {
         0.0f, 0.0f, 1.0f, 1.0f,
@@ -102,39 +96,50 @@ void picopter::DisplayShit(int width, int height, void *data) {
         1.0f, 1.0f, 1.0f, 1.0f
     };
 
-    GLuint buffer;
-    glGenBuffers(1, &buffer);
-    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    glGenBuffers(1, &m_quad_buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, m_quad_buffer);
     glBufferData(GL_ARRAY_BUFFER, sizeof(quad_vertex_positions), quad_vertex_positions, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-    start = steady_clock::now();
-    DoMoreShit(display, surface, buffer, program, texture);
-    printf("RENDER TIME: %d ms\n", (int)TIMEDIFF(start));
-    
+    //Setup the shaders and texture buffer.
+    m_program = new GLProgram("simplevertshader.glsl", "simplefragshader.glsl");
+    m_texture = new GLTexture(width, height, GL_RGB);
 }
 
-void picopter::DoMoreShit(EGLDisplay display, EGLSurface surface, GLuint buffer, picopter::GLProgram &program, picopter::GLTexture &texture) {
+GLThreshold::GLThreshold(int width, int height)
+: GLThreshold(NULL, width, height) {}
+
+GLThreshold::~GLThreshold() {
+    eglDestroySurface(m_display, m_surface);
+    delete m_program;
+    delete m_texture;
+}
+
+void GLThreshold::Threshold(const cv::Mat &in, cv::Mat &out) {
+    //Load the data into a texture.
+    m_texture->SetData(in.data);
+    
     //Blank the display
-    glBindFramebuffer(GL_FRAMEBUFFER, texture.GetFramebufferId());
-    glViewport(0, 0, texture.GetWidth(), texture.GetHeight());
+    glBindFramebuffer(GL_FRAMEBUFFER, m_texture->GetFramebufferId());
+    glViewport(0, 0, m_texture->GetWidth(), m_texture->GetHeight());
     check();
     glClear(GL_COLOR_BUFFER_BIT);
     check();
     
-    glUseProgram(program);
+    glUseProgram(*m_program);
     check();
 
-    glUniform1i(glGetUniformLocation(program,"tex"), 0);
-    glUniform4f(glGetUniformLocation(program, "threshLow"),0,167/255.0, 86/255.0,0);
-    glUniform4f(glGetUniformLocation(program, "threshHigh"),255/255.0,255/255.0, 141/255.0,1);
+    //Load in the texture and thresholding parameters.
+    glUniform1i(glGetUniformLocation(*m_program,"tex"), 0);
+    glUniform4f(glGetUniformLocation(*m_program, "threshLow"),0,167/255.0, 86/255.0,0);
+    glUniform4f(glGetUniformLocation(*m_program, "threshHigh"),255/255.0,255/255.0, 141/255.0,1);
     check();
 
-    glBindBuffer(GL_ARRAY_BUFFER, buffer);   check();
-    glBindTexture(GL_TEXTURE_2D, texture);  check();
+    glBindBuffer(GL_ARRAY_BUFFER, m_quad_buffer);   check();
+    glBindTexture(GL_TEXTURE_2D, *m_texture);  check();
 
-    // Initialize the vertex position attribute from the vertex shader
-    GLuint loc = glGetAttribLocation(program, "vPosition");
+    //Initialize the vertex position attribute from the vertex shader
+    GLuint loc = glGetAttribLocation(*m_program, "vPosition");
     glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE, 0, 0);  check();
     glEnableVertexAttribArray(loc); check();
 
@@ -147,21 +152,19 @@ void picopter::DoMoreShit(EGLDisplay display, EGLSurface surface, GLuint buffer,
     //glFinish(); check();
     //glFlush(); check();
 
-
     //RENDER
-    eglSwapBuffers(display, surface);
+    eglSwapBuffers(m_display, m_surface);
     //check();
 
     //glFinish();
     
-    /*void *out = malloc(3 * texture.GetWidth() * texture.GetHeight());
-    texture.GetRenderedData(out);
+    /*void *out = malloc(3 * m_texture->GetWidth() * m_texture->GetHeight());
+    m_texture->GetRenderedData(out);
     FILE *fp = fopen("TEMP.RGB", "wb");
-    fwrite(out, 3 * texture.GetWidth() * texture.GetHeight(), 1, fp);
+    fwrite(out, 3 * m_texture->GetWidth() * m_texture->GetHeight(), 1, fp);
     fclose(fp);*/
 }
 
-namespace picopter {
 GLProgram::GLProgram(const char *vertex_file, const char *fragment_file) {
     GLint status;
     m_program_id = glCreateProgram();
@@ -313,5 +316,3 @@ GLuint GLTexture::GetTextureId() {
 GLuint GLTexture::GetFramebufferId() {
     return m_framebuffer_id;
 }
-
-} //namespace picopter
