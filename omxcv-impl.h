@@ -6,6 +6,7 @@
 #ifndef __OMXCV_IMPL_H
 #define __OMXCV_IMPL_H
 
+#include <deque>
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -97,25 +98,25 @@ namespace omxcv {
             void input_worker();
             bool write_data(OMX_BUFFERHEADERTYPE *out, int64_t timestamp);
     };
-    
+
     class OmxCvJpegImpl {
         public:
             OmxCvJpegImpl(int width, int height, int quality=90);
             virtual ~OmxCvJpegImpl();
-            
+
             bool process(const char *filename, const cv::Mat &mat);
         private:
             int m_width, m_height, m_stride, m_quality;
-            
+
             std::condition_variable m_input_signaller;
             std::deque<std::pair<OMX_BUFFERHEADERTYPE *, std::string>> m_input_queue;
             std::thread m_input_worker;
             std::mutex  m_input_mutex;
             std::atomic<bool> m_stop;
-            
+
             ILCLIENT_T *m_ilclient;
             COMPONENT_T *m_encoder_component;
-            
+
             void input_worker();
     };
 }
