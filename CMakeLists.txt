@@ -16,7 +16,7 @@ execute_process (COMMAND git  show -s --format=%ci HEAD
 )
 
 #Required libraries
-find_package (OpenCV 2.4 REQUIRED)
+find_package (OpenCV)
 include_directories (${OpenCV_INCLUDE_DIR})
 find_package (Threads REQUIRED) # For pthreads
 

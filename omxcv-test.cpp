@@ -40,12 +40,21 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     //We can try to set these, but the camera may ignore this anyway...
+#if (CV_MAJOR_VERSION < 3)
     capture.set(CV_CAP_PROP_FRAME_WIDTH, width);
     capture.set(CV_CAP_PROP_FRAME_HEIGHT, height);
     capture.set(CV_CAP_PROP_FPS, 30);
 
     OmxCv *e = new OmxCv((const char*)"save.mkv", (int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT), 4000);
     //OmxCvJpeg *j = new OmxCvJpeg((int)capture.get(CV_CAP_PROP_FRAME_WIDTH),(int)capture.get(CV_CAP_PROP_FRAME_HEIGHT));
+#else
+    capture.set(cv::CAP_PROP_FRAME_WIDTH, width);
+    capture.set(cv::CAP_PROP_FRAME_HEIGHT, height);
+    capture.set(cv::CAP_PROP_FPS, 30);
+
+    OmxCv *e = new OmxCv((const char*)"save.mkv", (int)capture.get(cv::CAP_PROP_FRAME_WIDTH),(int)capture.get(cv::CAP_PROP_FRAME_HEIGHT), 4000);
+    //OmxCvJpeg *j = new OmxCvJpeg((int)capture.get(cv::CAP_PROP_FRAME_WIDTH),(int)capture.get(cv::CAP_PROP_FRAME_HEIGHT));
+#endif // (CV_MAJOR_VERSION < 3)
     
     auto totstart = steady_clock::now();
     cv::Mat image;

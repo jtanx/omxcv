@@ -229,13 +229,13 @@ OmxCvJpeg::~OmxCvJpeg() {
  */
 bool OmxCvJpeg::Encode(const char *filename, const cv::Mat &in, bool fallback) {
     if (in.cols != m_width || in.rows != m_height || in.type() != CV_8UC3) {
-        std::vector<int> params {CV_IMWRITE_JPEG_QUALITY, m_quality};
+        std::vector<int> params {cv::IMWRITE_JPEG_QUALITY, m_quality};
         return cv::imwrite(filename, in, params);
     }
 
     bool ret = m_impl->process(filename, in);
     if (!ret && fallback) {
-        std::vector<int> params {CV_IMWRITE_JPEG_QUALITY, m_quality};
+        std::vector<int> params {cv::IMWRITE_JPEG_QUALITY, m_quality};
         return cv::imwrite(filename, in, params);
     }
     return ret;
