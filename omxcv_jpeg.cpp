@@ -195,12 +195,9 @@ bool OmxCvJpegImpl::process(const char *filename, const cv::Mat &mat) {
 
 /**
  * Constructor for our wrapper.
- * @param [in] name The file to save to.
- * @param [in] width The video width.
- * @param [in] height The video height.
- * @param [in] bitrate The bitrate, in Kbps.
- * @param [in] fpsnum The FPS numerator.
- * @param [in] fpsden The FPS denominator.
+ * @param [in] width The width of the image to encode.
+ * @param [in] height The height of the image to encode.
+ * @param [in] quality The JPEG quality factor (1-100). 100 is best quality.
  */
 OmxCvJpeg::OmxCvJpeg(int width, int height, int quality)
 : m_width(width)
