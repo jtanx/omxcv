@@ -37,7 +37,11 @@ void BGR2RGB(const cv::Mat &src, uint8_t *dst, int stride) {
     }
 #else
     cv::Mat omat(src.rows, src.cols, CV_8UC3, dst, stride);
+#if (CV_MAJOR_VERSION < 3)
     cv::cvtColor(src, omat, CV_BGR2RGB);
+#else
+    cv::cvtColor(src, omat, cv::COLOR_BGR2RGB);
+#endif // (CV_MAJOR_VERSION < 3)
 #endif
 }
 
@@ -100,7 +104,11 @@ bool OmxCvImpl::lav_init() {
     }
 
     if (m_mux_ctx->oformat->flags & AVFMT_GLOBALHEADER) {
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57,24,102)
+        m_video_stream->codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+#else
         m_video_stream->codec->flags |= CODEC_FLAG_GLOBAL_HEADER;
+#endif
     }
 
     return true;
